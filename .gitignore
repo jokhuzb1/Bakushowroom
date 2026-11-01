@@ -1,0 +1,18 @@
+# dependencies and build output
+node_modules/
+dist/
+.vercel/
+
+# client source material (original PDF plans) and raw downloads: never published
+input/
+
+# local QA captures
+shots/
+
+# editor / OS
+.DS_Store
+Thumbs.db
+*.log
+
+# python bytecode
+__pycache__/

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="UTF-8" /><title>Bake textures</title></head>
+  <body style="font: 14px system-ui; padding: 24px">
+    <p id="out">Baking textures…</p>
+    <script type="module">
+      // Dev tool: generates the procedural interior textures once and saves them as WebP files.
+      import { generateTextures } from '/src/textures.js';
+      const out = document.getElementById('out');
+      const T = await generateTextures((p, n) => { out.textContent = `Baking ${n ?? ''} ${Math.round(p * 100)}%`; });
+      const manifest = {};
+      for (const [name, t] of Object.entries(T)) {
+        manifest[name] = t.world;
+        for (const kind of ['map', 'roughnessMap', 'normalMap']) {
+          const url = t[kind].image.toDataURL('image/webp', kind === 'normalMap' ? 0.95 : 0.88);
+          await fetch(`/__bake?file=${name}_${kind}.webp`, { method: 'POST', body: url });
+        }
+      }
+      await fetch('/__bake?file=manifest.json', { method: 'POST', body: JSON.stringify(manifest) });
+      out.textContent = 'Done: ' + Object.keys(manifest).join(', ');
+      window.bakeDone = true;
+    </script>
+  </body>
+</html>

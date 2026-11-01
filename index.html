@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Baku City Showroom</title>
+  </head>
+  <body data-mode="loading">
+    <canvas id="view"></canvas>
+
+    <aside class="card" id="info">
+      <div class="eyebrow">Virtual showroom</div>
+      <h1>Baku City</h1>
+      <div class="meta" id="meta"></div>
+      <div class="floor-head">
+        <div>
+          <div id="floor-title">Choose a floor</div>
+          <div class="sub" id="floor-sub">Hover the building or pick from the list</div>
+        </div>
+        <button id="back" title="Back to building">Building</button>
+      </div>
+      <ul id="floors"></ul>
+    </aside>
+
+    <section class="card" id="unit" hidden>
+      <button id="u-close" class="x" title="Close">×</button>
+      <div class="eyebrow" id="u-status">Available</div>
+      <h2 id="u-code">Apartment</h2>
+      <div class="sub" id="u-type"></div>
+      <dl>
+        <dt>Area</dt><dd id="u-area"></dd>
+        <dt>Floor</dt><dd id="u-floor"></dd>
+      </dl>
+      <div class="actions">
+        <button id="u-view" class="primary">View apartment</button>
+        <button id="u-tour" class="secondary">▶ Guided tour</button>
+        <button id="u-walk" class="secondary">Walk inside</button>
+      </div>
+    </section>
+
+    <section class="card" id="plan" hidden>
+      <div class="title"></div>
+      <canvas></canvas>
+      <div class="rooms"></div>
+    </section>
+
+    <div id="signs"></div>
+    <div id="room-title"></div>
+    <div id="pad">
+      <button data-key="ArrowLeft" title="Turn left">↺</button>
+      <div class="col">
+        <button data-key="KeyW" title="Forward">▲</button>
+        <button data-key="KeyS" title="Back">▼</button>
+      </div>
+      <button data-key="ArrowRight" title="Turn right">↻</button>
+    </div>
+
+    <div class="hint-bar" id="walk-hint"><span id="hint-text"></span>
+      <button id="walk-tour">▶ Tour</button><button id="walk-in">Walk inside</button><button id="exit-walk">Back</button></div>
+
+    <div class="card" id="tour">
+      <div id="tour-caption"></div>
+      <button id="tour-stop">Stop tour</button>
+      <div class="track"><div id="tour-bar"></div></div>
+    </div>
+    <div id="tip" hidden></div>
+
+    <div id="loader">
+      <div class="brand">Showroom</div>
+      <div class="bar"><div id="load-bar"></div></div>
+      <div id="load-text">Starting</div>
+    </div>
+
+    <script type="module" src="/src/building/main.js"></script>
+  </body>
+</html>

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="UTF-8" /><title>Model library</title>
+    <style>body{margin:0;background:#2a2723;color:#eee;font:12px system-ui}#g{display:grid;grid-template-columns:repeat(6,1fr);gap:4px;padding:4px}figure{margin:0;background:#3a3631}img{width:100%;display:block}figcaption{padding:3px 5px}</style>
+  </head>
+  <body>
+    <div id="g"></div>
+    <script type="module">
+      // Dev tool: thumbnails + real-world size (m) of every model in public/models.
+      import * as THREE from 'three';
+      import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+      import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+      const ids = await (await fetch('/__models')).json();
+      const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+      r.setSize(220, 220);
+      r.toneMapping = THREE.NeutralToneMapping;
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xe8e4dd);
+      scene.environment = new THREE.PMREMGenerator(r).fromScene(new RoomEnvironment()).texture;
+      const cam = new THREE.PerspectiveCamera(30, 1, 0.01, 100);
+      const loader = new GLTFLoader();
+      const info = {};
+      for (const id of ids) {
+        const g = (await loader.loadAsync(`/models/${id}.glb`)).scene;
+        const box = new THREE.Box3().setFromObject(g), size = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
+        info[id] = size.toArray().map((v) => +v.toFixed(2));
+        scene.add(g);
+        const d = size.length() * 1.6;
+        cam.position.set(c.x + d * 0.55, c.y + d * 0.45, c.z + d * 0.7);
+        cam.lookAt(c);
+        r.render(scene, cam);
+        scene.remove(g);
+        const fig = document.createElement('figure');
+        fig.innerHTML = `<img src="${r.domElement.toDataURL()}"><figcaption>${id}<br>${info[id].join(' × ')} m</figcaption>`;
+        document.getElementById('g').append(fig);
+      }
+      window.info = info;
+      window.done = true;
+    </script>
+  </body>
+</html>

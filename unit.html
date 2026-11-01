@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Showroom · Residence 2B</title>
+  </head>
+  <body data-mode="doll">
+    <canvas id="view"></canvas>
+
+    <div id="labels"></div>
+
+    <aside class="card" id="info">
+      <div class="eyebrow">Virtual showroom</div>
+      <h1 id="unit-name">Residence</h1>
+      <div id="unit-meta" class="meta"></div>
+      <ul id="rooms"></ul>
+      <div class="hint">Click a room to walk in</div>
+    </aside>
+
+    <canvas id="minimap"></canvas>
+
+    <div class="hint-bar" id="walk-hint">Drag to look · WASD or arrows to move · Click the floor to walk there · Shift to go faster</div>
+
+    <nav class="dock">
+      <div class="seg">
+        <button id="btn-doll" class="on">Dollhouse</button>
+        <button id="btn-walk">Walkthrough</button>
+      </div>
+      <button id="btn-photo" class="toggle" title="Path-trace a photoreal still of this view"><i></i><span class="off">Render photo</span><span class="on">Stop render</span></button>
+      <button id="btn-shot" class="icon" title="Save image">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h3l2-2h6l2 2h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+      </button>
+    </nav>
+
+    <div id="status" class="pill">Loading</div>
+
+    <div id="loader">
+      <div class="brand">Showroom</div>
+      <div class="bar"><div id="load-bar"></div></div>
+      <div id="load-text">Starting</div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
