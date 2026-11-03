@@ -28,8 +28,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_SCENES = os.path.join(ROOT, 'bake', 'out')
 PANO_DIR = os.path.join(ROOT, 'public', 'pano')
 HDRI = os.path.join(ROOT, 'bake', 'hdri', 'residential_garden.hdr')
+# the street views have their own buildings all round: a sky-only HDRI over them
+SKY_HDRI = os.path.join(ROOT, 'bake', 'hdri', 'kloofendal_48d_partly_cloudy_puresky.hdr')
 # like a photographer, open up a little in rooms with little or no daylight
-ROOM_EXPOSURE = {'living': 0.15, 'bedroom': 0.35, 'hall': 0.7, 'bath': 0.5, 'balcony': -0.5, 'shopFront': -0.35, 'shopBack': -0.2}
+ROOM_EXPOSURE = {'living': 0.15, 'bedroom': 0.35, 'hall': 0.2, 'bath': -0.25, 'balcony': -0.5, 'shopFront': -0.35, 'shopBack': -0.2, 'street': -1.1}
 
 
 def args():
@@ -112,7 +114,7 @@ def setup_render(o):
     vs.exposure = o.exposure
 
 
-def setup_world(o):
+def setup_world(o, hdri=HDRI):
     world = bpy.data.worlds.new('Sky')
     bpy.context.scene.world = world
     world.use_nodes = True
@@ -122,7 +124,7 @@ def setup_world(o):
     mapping = nt.nodes.new('ShaderNodeMapping')
     mapping.inputs['Rotation'].default_value[2] = math.radians(o.hdri_rotation)
     env = nt.nodes.new('ShaderNodeTexEnvironment')
-    env.image = bpy.data.images.load(HDRI)
+    env.image = bpy.data.images.load(hdri)
     bg = nt.nodes.new('ShaderNodeBackground')
     bg.inputs['Strength'].default_value = 1.0
     out = nt.nodes.new('ShaderNodeOutputWorld')
@@ -136,13 +138,19 @@ def setup_world(o):
 
 def add_lights(lights):
     for i, l in enumerate(lights):
-        kind = {'spot': 'SPOT', 'point': 'POINT'}[l['type']]
+        kind = {'spot': 'SPOT', 'point': 'POINT', 'sun': 'SUN'}[l['type']]
         data = bpy.data.lights.new(f'L{i}', kind)
         data.color = l['color'][:3]
-        data.energy = l['watts']
-        data.shadow_soft_size = l.get('radius', 0.05)
         obj = bpy.data.objects.new(f'L{i}', data)
         bpy.context.scene.collection.objects.link(obj)
+        if kind == 'SUN':
+            to_sun = b(l['toSun']).normalized()
+            obj.rotation_euler = (-to_sun).to_track_quat('-Z', 'Y').to_euler()
+            data.energy = l['strength']
+            data.angle = math.radians(0.8)
+            continue
+        data.energy = l['watts']
+        data.shadow_soft_size = l.get('radius', 0.05)
         obj.location = b(l['pos'])
         if kind == 'SPOT':
             d = (b(l['target']) - obj.location).normalized()
@@ -215,7 +223,7 @@ def main():
             continue
         bpy.ops.wm.read_factory_settings(use_empty=True)
         setup_render(o)
-        setup_world(o)
+        setup_world(o, SKY_HDRI if meta.get('exterior') else HDRI)
         bpy.ops.import_scene.gltf(filepath=meta_path[:-5] + '.glb')
         add_lights(meta.get('lights', []))
         tune_materials()

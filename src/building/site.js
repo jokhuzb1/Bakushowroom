@@ -44,6 +44,14 @@ function blockGeo(w, h, d) {
   return g;
 }
 
+// The pedestrian crossing over the boulevard (world coordinates), in line with the garden opening: from it a
+// visitor sees the whole row of shop fronts. The street views (3D and 360°) stand here.
+export const CROSSWALK = { x: 23.7, width: 3.2, z0: -33.1, z1: -17.1 };
+export const STREET_VIEWS = [
+  { id: 'crosswalk', name: 'Crosswalk', pos: [23.7, 1.6, -25.0], look: [0, 3.2, -13.3] },
+  { id: 'frontage', name: 'Shop fronts', pos: [0, 1.6, -16.0], look: [0, 2.0, -13.3] },
+];
+
 export function buildSite() {
   const root = new THREE.Group();
   const std = (p) => new THREE.MeshStandardMaterial(p);
@@ -70,7 +78,14 @@ export function buildSite() {
   plane(500, 16, asphalt, 0, -0.02, -25.1);
   plane(22, 500, asphalt, -40, -0.02, 40);
   const marks = [];
-  for (let x = -180; x < 180; x += 6) marks.push(new THREE.PlaneGeometry(3, 0.15).rotateX(-Math.PI / 2).translate(x, 0, 0));
+  for (let x = -180; x < 180; x += 6) if (Math.abs(x - CROSSWALK.x) > 3) marks.push(new THREE.PlaneGeometry(3, 0.15).rotateX(-Math.PI / 2).translate(x, 0, 0));
+  // zebra crossing over the boulevard at the garden opening, facing the shop fronts (the street-view spot)
+  const zebra = [];
+  for (let z = -32.6; z <= -17.6; z += 1.0) zebra.push(new THREE.PlaneGeometry(CROSSWALK.width, 0.5).rotateX(-Math.PI / 2).translate(CROSSWALK.x, 0, z));
+  const zebraMesh = new THREE.Mesh(mergeGeometries(zebra), paint);
+  zebraMesh.position.y = -0.008;
+  zebraMesh.receiveShadow = true;
+  root.add(zebraMesh);
   const lane = new THREE.Mesh(mergeGeometries(marks), paint);
   lane.position.set(X(17.5), -0.01, Z(-16.0));
   root.add(lane);

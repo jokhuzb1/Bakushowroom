@@ -111,7 +111,7 @@ export class PanoViewer {
     this.el.rooms.innerHTML = '';
     for (const s of t.stops) {
       const b = document.createElement('button');
-      b.innerHTML = `${s.name}<small>${s.area.toFixed(1)} m²</small>`;
+      b.innerHTML = `${s.name}${s.area ? `<small>${s.area.toFixed(1)} m²</small>` : ''}`; // street stops have no area
       b.onclick = () => this.go(s, { look: true });
       s.btn = b;
       this.el.rooms.append(b);
@@ -136,7 +136,7 @@ export class PanoViewer {
     const t = this.tour;
     this.stop = stop;
     for (const s of t.stops) s.btn.classList.toggle('on', s === stop);
-    this.el.room.innerHTML = `<b>${stop.name}</b><span>${stop.area.toFixed(1)} m²</span>`;
+    this.el.room.innerHTML = `<b>${stop.name}</b>${stop.area ? `<span>${stop.area.toFixed(1)} m²</span>` : ''}`;
     history.replaceState(null, '', `#pano=${t.id}/${stop.id}`);
     const toLon = heading ?? (look ? Math.atan2(stop.look[1], stop.look[0]) / DEG : this.lon);
     this.anim = { from: { lon: this.lon, lat: this.lat }, d: { lon: wrap180(toLon - this.lon), lat: -this.lat }, t0: performance.now(), dur: 650 };

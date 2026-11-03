@@ -73,6 +73,39 @@ function signTex(s, { tagline = true } = {}) {
     }
   });
 }
+// Illuminated fascia board for the street front, on the colonnade's entablature above the shop (facing the
+// street, -z): brand name with the tagline beside it, in the tenant's colours.
+export function fasciaSign(s, w, h = 0.58) {
+  const px = 2048, py = Math.round((px * h) / w);
+  const tex = canvasTex(px, py, (g, cw, ch) => {
+    g.fillStyle = s.colors.primary;
+    g.fillRect(0, 0, cw, ch);
+    g.strokeStyle = s.colors.accent;
+    g.lineWidth = 6;
+    g.strokeRect(10, 10, cw - 20, ch - 20);
+    const serif = s.kind !== 'fastfood';
+    g.fillStyle = s.colors.text;
+    g.textBaseline = 'middle';
+    g.textAlign = 'center';
+    g.letterSpacing = s.kind === 'fashion' ? '22px' : '6px';
+    g.font = `${s.kind === 'fastfood' ? 800 : 600} ${Math.round(ch * 0.58)}px ${serif ? 'Georgia, "Times New Roman", serif' : '"Segoe UI", Arial, sans-serif'}`;
+    const name = s.kind === 'fashion' ? s.brand.toUpperCase() : s.brand;
+    const nw = g.measureText(name).width;
+    g.letterSpacing = '4px';
+    g.font = `500 ${Math.round(ch * 0.2)}px "Segoe UI", Arial, sans-serif`;
+    const tag = s.tagline.toUpperCase(), tw = g.measureText(tag).width, gap = ch * 0.5;
+    const x0 = (cw - nw - gap - tw) / 2;
+    g.fillStyle = s.colors.accent;
+    g.textAlign = 'left';
+    g.fillText(tag, x0 + nw + gap, ch / 2 + 2);
+    g.fillRect(x0 + nw + gap / 2 - 2, ch * 0.3, 4, ch * 0.4);
+    g.fillStyle = s.colors.text;
+    g.letterSpacing = s.kind === 'fashion' ? '22px' : '6px';
+    g.font = `${s.kind === 'fastfood' ? 800 : 600} ${Math.round(ch * 0.58)}px ${serif ? 'Georgia, "Times New Roman", serif' : '"Segoe UI", Arial, sans-serif'}`;
+    g.fillText(name, x0, ch / 2 + 4);
+  });
+  return new THREE.Mesh(new THREE.PlaneGeometry(w, h), std({ map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 0.45, roughness: 0.4, metalness: 0.1 }));
+}
 function menuTex(s, title, items) {
   return canvasTex(768, 1024, (g, w, h) => {
     g.fillStyle = '#16120f';

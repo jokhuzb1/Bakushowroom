@@ -10,7 +10,10 @@ import { buildingMaterials } from '../building/materials.js';
 import { buildBuilding } from '../building/model.js';
 import { loadInteriorKit } from '../building/kit.js';
 import { buildShowflat } from '../building/showflat.js';
-import { buildShop } from '../building/shops.js';
+import { buildShop, SHOPS } from '../building/shops.js';
+import { buildSite, STREET_VIEWS } from '../building/site.js';
+import { buildComplex } from '../building/complex.js';
+import { CX, CY } from '../building/model.js';
 import { tourStops } from './rooms.js';
 import { panoUnits } from './units.js';
 
@@ -34,6 +37,7 @@ function describeLights(root) {
     const pos = o.getWorldPosition(v).toArray(), color = o.color.clone().lerp(new THREE.Color(1, 1, 1), 0.5).toArray();
     if (o.isSpotLight) out.push({ type: 'spot', pos, target: o.target.getWorldPosition(t).toArray(), color, watts: o.userData.watts ?? o.intensity * 6, angle: o.angle, blend: o.penumbra, radius: 0.04 });
     else if (o.isPointLight) out.push({ type: 'point', pos, color, watts: o.userData.watts ?? o.intensity * 14, radius: 0.08 });
+    else if (o.isDirectionalLight) out.push({ type: 'sun', toSun: o.position.clone().sub(o.target.position).normalize().toArray(), color: o.color.toArray(), strength: o.userData.strength ?? 3 });
   });
   return out;
 }
@@ -55,7 +59,8 @@ function stripRealtime(root) {
       satinParquet ??= Object.assign(o.material.clone(), { roughnessMap: null, roughness: 0.62, color: new THREE.Color(0xc4beb6) });
       o.material = satinParquet;
     }
-    if (o.isLight || (o.isMesh && o.material?.blending === THREE.AdditiveBlending)) drop.push(o);
+    // (and the invisible boxes the showroom picks floors with)
+    if (o.isLight || (o.isMesh && (o.material?.blending === THREE.AdditiveBlending || o.material?.visible === false))) drop.push(o);
     else if (o.type === 'Object3D' && !o.children.length) drop.push(o); // spot targets
   });
   drop.forEach((o) => o.parent?.remove(o));
@@ -72,6 +77,46 @@ function lookFor(stop) {
   return [0, y < (q[1] + q[3]) / 2 ? 1 : -1];
 }
 
+// The street front for shop buyers: the whole building with the five shops fitted out and lit behind the
+// glass, the boulevard and its crossing, a late-afternoon sun from the north-west (as in the 3D view) so
+// the shop fronts are in the light. Stops: the middle of the zebra crossing and the pavement in front.
+async function exportStreet(B, K, exporter) {
+  log('Building the street front…');
+  const scene = new THREE.Scene();
+  scene.add(B.root, buildSite(), buildComplex());
+  for (const s of SHOPS) { const sh = buildShop(s, K); scene.add(sh.group, sh.lights); }
+  const sun = new THREE.DirectionalLight(0xffe6c7, 1);
+  sun.position.set(-0.35, 0.62, -0.7);
+  sun.userData.strength = 3.2;
+  scene.add(sun);
+  const lights = describeLights(scene);
+  stripRealtime(scene);
+  log('Exporting the street front…');
+  const glb = await exporter.parseAsync(scene, { binary: true, maxTextureSize: 2048 });
+  await post('bake/out/street.glb', new Blob([glb]));
+  await post('bake/out/street.json', JSON.stringify({
+    variant: 'street', exterior: true, finish: 'exterior', lights,
+    rooms: STREET_VIEWS.map((v) => ({ id: v.id, kind: 'street', cam: v.pos, output: `street/${v.id}` })),
+  }, null, 1));
+  // tour: plan coordinates for the mini map; hotspots point at the other stop's spot on the ground
+  const plan = (p) => [+(p[0] + CX).toFixed(2), +(p[2] + CY).toFixed(2)];
+  const stops = STREET_VIEWS.map((v) => {
+    const [x, y] = plan(v.pos), d = [v.look[0] - v.pos[0], v.look[2] - v.pos[2]], n = Math.hypot(...d);
+    return {
+      id: v.id, name: v.name, type: 'street', area: null, plan: [x, y], look: [d[0] / n, d[1] / n], rects: [[x - 1.2, y - 1.2, x + 1.2, y + 1.2]],
+      links: STREET_VIEWS.filter((o) => o !== v).map((o) => {
+        const dir = [o.pos[0] - v.pos[0], 0.2 - v.pos[1], o.pos[2] - v.pos[2]], m = Math.hypot(...dir);
+        return { to: o.id, dir: dir.map((c) => +(c / m).toFixed(4)) };
+      }),
+    };
+  });
+  // the building outline and the shop partitions as the map's walls
+  const walls = [[0, -4.6, 35, -4.3], [0, 18.0, 35, 18.3], [-0.2, -4.6, 0, 18.3], [35, -4.6, 35.2, 18.3], ...SHOPS.flatMap((s) => [[s.x0 - 0.1, -4.3, s.x0, 5.5], [s.x1, -4.3, s.x1 + 0.1, 5.5]])];
+  await post('public/pano/street/tour.json', JSON.stringify({
+    id: 'street', title: 'Shop fronts', subtitle: 'Ground-floor retail · street view from the crossing', bounds: [-4, -26, 46, 20], walls, stops,
+  }));
+}
+
 async function main() {
   log('Loading plans and materials…');
   const data = await (await fetch('/data/building.json')).json();
@@ -81,6 +126,7 @@ async function main() {
   const only = q.get('units')?.split(',');
   const list = panoUnits(B.floors).filter((p) => !only || only.includes(p.id));
   const exporter = new GLTFExporter();
+  if (!only || only.includes('street')) await exportStreet(B, K, exporter);
 
   for (const [i, p] of list.entries()) {
     log(`[${i + 1}/${list.length}] Building ${p.id}…`);
@@ -89,6 +135,7 @@ async function main() {
     const scene = new THREE.Scene();
     scene.add(sf.group);
     if (sf.lights) scene.add(sf.lights);
+    if (sf.bakeLights) scene.add(sf.bakeLights);
     const stops = tourStops(sf.rooms, sf.colliders, sf.sheet.walls);
     const lights = describeLights(scene);
     stripRealtime(scene);

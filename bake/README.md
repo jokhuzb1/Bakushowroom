@@ -15,6 +15,11 @@ walk-through, so the two always match.
   - A bathroom split into WC + shower on the drawings is one stop.
   - Halls under 4.5 m² fold into the room they open onto.
   - Balconies too narrow to stand on are left out.
+- **Street view** (`#pano=street`, "Street view 360°" on a shop card): two stops, the middle of the zebra
+  crossing and the pavement in front of the shops, with the shops lit behind the glass and their brand
+  boards on the colonnade. The camera spots are `STREET_VIEWS` in `src/building/site.js`.
+- **Lighting:** bathrooms and small rooms get a ceiling light for the bake only (the 3D view keeps its
+  light count down).
 - **Shops:** the five shops (`src/building/shops.js`) have two stops each: the front by the windows
   and the counter / fitting area at the back.
 
@@ -47,5 +52,6 @@ Then re-run the two steps below for that shop only (for example `shop-evos`).
      `<stop>-2k.jpg` for phones.
    - **Time:** on the RTX 5060 a 4K stop takes about a minute; all 68 stops take about 1–1.5 hours.
 
-`bake/hdri/residential_garden.hdr` (copied from the panoramic project) lights the scenes and is the
-view through the windows. `bake/out/` and `bake/hdri/` are not committed.
+`bake/hdri/residential_garden.hdr` (copied from the panoramic project) lights the interiors and is the
+view through the windows; the street view uses the sky-only `kloofendal_48d_partly_cloudy_puresky.hdr`
+and a sun matching the 3D view. `bake/out/` and `bake/hdri/` are not committed.

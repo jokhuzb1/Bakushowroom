@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { piecesAround, projectUV } from '../geo.js';
 import { levels, ROOF_Z, sheetIndexFor, unitsForFloor } from './units.js';
-import { insideShop } from './shops.js';
+import { insideShop, SHOPS, fasciaSign } from './shops.js';
 
 export const CX = 17.5, CY = 9.1; // plan point that becomes the world origin
 const X = (x) => x - CX;
@@ -363,6 +363,14 @@ function buildPodium(data, M, F) {
   for (const x of [8.0, 27.0]) {
     const s = new THREE.Mesh(new THREE.PlaneGeometry(4.6, 0.58), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.4, metalness: 0.2, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.35 }));
     s.position.set(X(x), 4.3, Z(yK - 0.46));
+    s.rotation.y = Math.PI;
+    g.add(s);
+  }
+  // each shop's own illuminated fascia board, centred over its frontage, in line with the lobby signs
+  for (const sh of SHOPS) {
+    const w = Math.min(sh.x1 - sh.x0 - 0.7, 3.8);
+    const s = fasciaSign(sh, w);
+    s.position.set(X((sh.x0 + sh.x1) / 2), 4.3, Z(yK - 0.46));
     s.rotation.y = Math.PI;
     g.add(s);
   }

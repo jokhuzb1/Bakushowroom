@@ -8,7 +8,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { makeSky } from '../textures.js';
 import { buildingMaterials } from './materials.js';
 import { buildBuilding, CX, CY } from './model.js';
-import { buildSite } from './site.js';
+import { buildSite, STREET_VIEWS } from './site.js';
 import { buildComplex } from './complex.js';
 import { Walk } from '../walk.js';
 import { furnishUnit, furnishCommon } from './interior.js';
@@ -163,7 +163,7 @@ async function init() {
   const orbit = new OrbitControls(camera, canvas);
   orbit.enableDamping = true;
   orbit.dampingFactor = 0.08;
-  orbit.maxPolarAngle = THREE.MathUtils.degToRad(86);
+  orbit.maxPolarAngle = THREE.MathUtils.degToRad(89.5); // down to eye level for the street view
   orbit.minDistance = 8;
   orbit.maxDistance = 220;
   const homeTarget = new THREE.Vector3(0, 24, 0);
@@ -436,6 +436,7 @@ async function init() {
     $('#u-view').textContent = shop ? 'View shop' : 'View apartment';
     $('#u-tour').hidden = shop;
     $('#u-pano').hidden = !hasPano(u);
+    $('#u-street').hidden = !shop;
     $('#u-area').textContent = u.area ? `${u.area.toFixed(2)} m²` : '–';
     $('#u-floor').textContent = `${u.floor}`;
     $('#u-status').textContent = STATUS[u.status].label;
@@ -838,15 +839,25 @@ async function init() {
   // ---------- 360° tour (photoreal renders of floors 1-2 and the shops) ----------
   const allUnits = B.floors.flatMap((f) => f.units);
   const pano = new PanoViewer($('#pano'), {
-    // "3D view" from the tour: walk the same flat or shop in real time
-    on3D: (id) => { const u = allUnits.find((x) => panoId(x) === id); if (u) walkInto(u); },
+    // "3D view" from the tour: walk the same flat or shop in real time (or stand at the crossing)
+    on3D: (id) => { if (id === 'street') return streetView(); const u = allUnits.find((x) => panoId(x) === id); if (u) walkInto(u); },
   });
   const openPano = (u, stop = null) => { if (u && hasPano(u)) { stopTour(); pano.open(panoId(u), stop); } };
   $('#u-pano').onclick = () => openPano(selectedUnit);
   $('#walk-pano').onclick = () => openPano(walkCtx?.u);
+  $('#u-street').onclick = () => { stopTour(); pano.open('street'); };
   // shareable link: #pano=<tour id>/<room>
   const deep = location.hash.match(/^#pano=([\w-]+)(?:\/([\w-]+))?/);
-  if (deep) openPano(allUnits.find((x) => panoId(x) === deep[1]), deep[2]);
+  if (deep?.[1] === 'street') pano.open('street', deep[2]);
+  else if (deep) openPano(allUnits.find((x) => panoId(x) === deep[1]), deep[2]);
+
+  // ---------- street view: the shop fronts at eye level from the zebra crossing ----------
+  function streetView() {
+    backToBuilding();
+    const v = STREET_VIEWS[0];
+    animate(new THREE.Vector3(v.pos[0], 1.7, v.pos[2]), new THREE.Vector3(v.look[0], 1.2, v.look[2]), null, 2.2);
+  }
+  $('#street').onclick = streetView;
   // Back: walk -> apartment -> floor -> building
   const goBack = () => {
     if (mode === 'walk') enterUnit(walkCtx.u);

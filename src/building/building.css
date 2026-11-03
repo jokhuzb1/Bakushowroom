@@ -138,3 +138,8 @@ body[data-mode="walk"] #info { opacity: 0.35; }
 /* clean view while the camera moves */
 #signs, #tip, .exit, #room-title { transition: opacity 0.25s; }
 body[data-moving] #signs, body[data-moving] #tip, body[data-moving] .exit { opacity: 0; pointer-events: none; }
+
+/* street view: always on offer next to "Building" */
+.floor-head .head-actions { display: flex; gap: 6px; }
+#street { font-size: 12px; padding: 7px 11px; border-radius: 8px; background: rgba(255, 178, 89, 0.22); color: var(--accent); }
+#street:hover { background: rgba(255, 178, 89, 0.36); }

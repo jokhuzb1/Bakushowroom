@@ -267,6 +267,9 @@ export async function buildShowflat(floor, unit, M, wallMat) {
   const glowMat = new THREE.MeshBasicMaterial({ map: glowTexture(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.55 });
   const poolMat = new THREE.MeshBasicMaterial({ map: poolTexture(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.4, side: THREE.DoubleSide });
   const lights = new THREE.Group();
+  // bathrooms and small rooms have no real-time light (the 3D view keeps its light count down); the path-traced
+  // 360° bake needs a real ceiling light there or they come out dark
+  const bakeLights = new THREE.Group();
   for (const room of tpl.rooms) {
     await breathe();
     if (room.type === 'balcony') continue;
@@ -314,7 +317,13 @@ export async function buildShowflat(floor, unit, M, wallMat) {
     }
     // a real warm light per room so furniture and walls pick it up
     const area = rw * rd;
-    if (area < 9 || room.type === 'bath') continue;
+    if (area < 9 || room.type === 'bath') {
+      const bl = new THREE.PointLight(0xfff3e6, 0);
+      bl.position.set(cx, H - 0.35, cz);
+      bl.userData.watts = room.type === 'bath' ? 60 + area * 8 : 40 + area * 6;
+      bakeLights.add(bl);
+      continue;
+    }
     const pl = new THREE.PointLight(0xffd6a6, Math.min(5, 1.2 + area * 0.18), Math.max(6, Math.max(rw, rd) * 1.6), 2);
     pl.position.set(cx, H - 0.45, cz);
     lights.add(pl);
@@ -330,7 +339,7 @@ export async function buildShowflat(floor, unit, M, wallMat) {
   }
   g.add(await merge(shell, breathe), lights);
   const units = SF.unit;
-  return { group: g, colliders, wallColliders, rooms: tpl.rooms, sheet: SF.sheet, unit: units, h: H };
+  return { group: g, bakeLights, colliders, wallColliders, rooms: tpl.rooms, sheet: SF.sheet, unit: units, h: H };
 }
 
 // merge the shell into one mesh per material (it is static)
