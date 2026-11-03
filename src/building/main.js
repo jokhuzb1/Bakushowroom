@@ -314,11 +314,9 @@ async function init() {
     return f.interior;
   }
   // only the textures/materials are warmed up after start-up; furniture is built on demand
-  // shaders for the interior materials are compiled in the background too, so opening the first floor
-  // doesn't stall on them
-  let holdFrames = false;
-  const warmUp = () => loadInteriorMaterials().then(() => { T.materialsReady = Math.round(performance.now()); return shopsReady(); })
-    .then(() => renderer.compileAsync(scene, camera)).catch((e) => console.warn('precompile', e));
+  // (no renderer.compileAsync() warm-up: it uploads uniforms without the clipping state these materials
+  // use for the dollhouse cut, which breaks every later frame)
+  const warmUp = () => loadInteriorMaterials().then(() => { T.materialsReady = Math.round(performance.now()); return shopsReady(); });
   // While nobody is interacting, pre-build the apartment types of the typical floors (4-5, 6-10, 11-16:
   // about 80% of all flats), one flat at a time, so most floors open instantly. Any input pauses it.
   let lastInput = performance.now();
@@ -761,10 +759,6 @@ async function init() {
     camera.fov = WALK_FOV;
     camera.updateProjectionMatrix();
     interiorLight(true);
-    // the show-flat's room lights change the lighting set-up, which recompiles every shader: do that off
-    // the main thread (parallel compile) with frames held, instead of freezing on the first walk frame
-    holdFrames = true;
-    try { await renderer.compileAsync(scene, camera); } finally { holdFrames = false; }
     $('#hint-text').textContent = 'Click a room sign or the floor to go there · drag to look around';
     const living = ui.rooms.find((r) => r.type === 'living');
     const v = living ? viewFor(living, [cx, cz]) : { target: [cx, cz], yaw: north ? 0 : Math.PI, pitch: -0.05 };
@@ -940,7 +934,7 @@ async function init() {
   function frame(t) {
     requestAnimationFrame(frame); // schedule first so one bad frame can't stop the loop
     clock.update(t);
-    if (document.body.dataset.pano || holdFrames) { needFull = true; return; } // 360° tour open / shaders compiling
+    if (document.body.dataset.pano) { needFull = true; return; } // the 360° tour covers the view
     const dt = Math.min(clock.getDelta(), 0.05);
     const now = performance.now();
     fitToWindow();
