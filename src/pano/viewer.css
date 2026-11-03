@@ -1,0 +1,48 @@
+/* 360° tour overlay (src/pano/viewer.js): full screen over the 3D showroom */
+#pano { position: fixed; inset: 0; z-index: 50; background: #14120f; }
+#pano .pano-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+#pano .pano-canvas:active { cursor: grabbing; }
+#pano .pano-spots { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.pano-spot { position: absolute; left: 0; top: 0; pointer-events: auto; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.pano-spot i { width: 46px; height: 46px; border-radius: 50%; border: 3px solid #fff; background: rgba(255, 178, 89, 0.35); box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35); transition: transform 0.15s, background 0.15s; }
+.pano-spot i::after { content: ""; display: block; width: 14px; height: 14px; margin: 13px auto 0; border-radius: 50%; background: #fff; }
+.pano-spot span { padding: 4px 10px; border-radius: 999px; background: rgba(24, 22, 19, 0.78); color: #fff; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.pano-spot:hover i { transform: scale(1.12); background: rgba(255, 178, 89, 0.7); }
+.pano-spot.hidden { display: none; }
+
+#pano .pano-top { position: absolute; left: 16px; right: 16px; top: 16px; display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; pointer-events: none; }
+#pano .pano-title, #pano .pano-actions { pointer-events: auto; }
+#pano .pano-title { padding: 12px 16px; border-radius: 14px; display: flex; flex-direction: column; gap: 2px; }
+#pano .pano-title b { font-family: Georgia, "Times New Roman", serif; font-size: 22px; font-weight: 600; }
+#pano .pano-title span { font-size: 12px; color: var(--muted); }
+#pano .pano-actions { display: flex; gap: 8px; }
+#pano .pano-actions button { padding: 10px 14px; border-radius: 12px; font-size: 13px; font-weight: 600; }
+#pano .pano-3d { background: var(--accent); color: #23211e; }
+#pano .pano-close { background: var(--glass); border: 1px solid var(--line); font-size: 18px; line-height: 1; }
+
+#pano .pano-room { position: absolute; left: 50%; top: 20px; transform: translateX(-50%); display: flex; align-items: baseline; gap: 10px; padding: 8px 16px; border-radius: 999px; background: rgba(24, 22, 19, 0.7); pointer-events: none; }
+#pano .pano-room b { font-size: 15px; }
+#pano .pano-room span { font-size: 12px; color: var(--accent); }
+
+#pano .pano-dock { position: absolute; left: 16px; right: 16px; bottom: 16px; display: flex; align-items: flex-end; gap: 12px; pointer-events: none; }
+#pano .pano-plan { pointer-events: auto; width: 220px; height: 160px; border-radius: 12px; background: rgba(24, 22, 19, 0.82); border: 1px solid var(--line); cursor: pointer; flex: none; }
+#pano .pano-side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+#pano .pano-rooms { pointer-events: auto; display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
+#pano .pano-rooms button { flex: none; display: flex; align-items: baseline; gap: 6px; padding: 9px 13px; border-radius: 999px; background: rgba(24, 22, 19, 0.78); border: 1px solid var(--line); font-size: 13px; }
+#pano .pano-rooms button small { color: var(--muted); font-size: 11px; }
+#pano .pano-rooms button.on { background: var(--accent); color: #23211e; }
+#pano .pano-rooms button.on small { color: rgba(35, 33, 30, 0.7); }
+#pano .pano-note { align-self: flex-start; padding: 5px 10px; border-radius: 8px; background: rgba(24, 22, 19, 0.6); color: var(--muted); font-size: 11px; }
+#pano .pano-wait { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: min(420px, calc(100% - 32px)); padding: 16px 20px; border-radius: 14px; background: rgba(24, 22, 19, 0.88); text-align: center; font-size: 14px; }
+body[data-pano] #view { visibility: hidden; }
+
+@media (max-width: 640px) {
+  #pano .pano-top { left: 12px; right: 12px; top: 12px; }
+  #pano .pano-title b { font-size: 18px; }
+  #pano .pano-room { top: auto; bottom: 120px; }
+  #pano .pano-dock { left: 12px; right: 12px; bottom: 12px; flex-direction: column; align-items: stretch; }
+  #pano .pano-plan { display: none; }
+}
+/* the next room's panorama is still downloading */
+#pano.loading .pano-room::after { content: ""; width: 12px; height: 12px; margin-left: 4px; align-self: center; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.3); border-top-color: var(--accent); animation: pano-spin 0.8s linear infinite; }
+@keyframes pano-spin { to { transform: rotate(360deg); } }

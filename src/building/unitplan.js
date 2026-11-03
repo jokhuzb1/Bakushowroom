@@ -9,8 +9,13 @@ const ROOM_STYLE = {
   bath: { name: 'Bathroom', fill: '#d6e7ee' },
   hall: { name: 'Hall', fill: '#e9e5de' },
   balcony: { name: 'Balcony', fill: '#ece7dc' },
+  shopFront: { name: 'Shop floor', fill: '#efe0c8' },
+  shopBack: { name: 'Counter', fill: '#e9e5de' },
 };
-const styleOf = (r) => ROOM_STYLE[r.kids ? 'kids' : r.type] ?? ROOM_STYLE.hall;
+const styleOf = (r) => {
+  const st = ROOM_STYLE[r.kids ? 'kids' : r.type] ?? ROOM_STYLE.hall;
+  return r.name ? { ...st, name: r.name } : st; // shops name their own zones
+};
 const inRect = (q, x, y) => x >= q[0] && x <= q[2] && y >= q[1] && y <= q[3];
 
 export class UnitPlan {
@@ -59,7 +64,7 @@ export class UnitPlan {
       furniture: furniture.map((c) => [c.x0 + CX, c.z0 + CY, c.x1 + CX, c.z1 + CY]).filter((q) => rooms.some((r) => r.rects.some((p) => q[0] < p[2] && q[2] > p[0] && q[1] < p[3] && q[3] > p[1]))),
       walls: walls.filter((w) => w[2] > this.bounds[0] && w[0] < this.bounds[2] && w[3] > this.bounds[1] && w[1] < this.bounds[3]),
     };
-    this.title.innerHTML = `<b>Apartment ${unit.code}</b><span class="fold"></span><span>${unit.rooms ?? ''}${unit.rooms ? '-room · ' : ''}${unit.area?.toFixed(1) ?? ''} m²</span>`;
+    this.title.innerHTML = `<b>${unit.kind === 'shop' ? unit.shop.brand : `Apartment ${unit.code}`}</b><span class="fold"></span><span>${unit.rooms ?? ''}${unit.rooms ? '-room · ' : ''}${unit.area?.toFixed(1) ?? ''} m²</span>`;
     // room shortcuts, living first
     const order = { living: 0, bedroom: 1, hall: 3, bath: 4, balcony: 5 };
     this.list.innerHTML = '';

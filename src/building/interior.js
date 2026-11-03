@@ -485,16 +485,20 @@ function skirting(room, mat, z, swings, g, walls) {
 
 // ---------- apartment ----------
 // Builds the furnished interior of one apartment type (unit number on one floor-plan sheet) at height 0;
-// every apartment of that type, on any floor, reuses it. Time-sliced: yields to the browser every few
-// milliseconds so building never stalls the view.
+// every apartment of that type, on any floor, reuses it. Time-sliced: yields to the browser every 8 ms
+// (half a 60 fps frame) so building never stalls the view.
 // MessageChannel yields aren't clamped like setTimeout (1 s per call in hidden tabs)
 const channel = new MessageChannel();
 const queue = [];
 channel.port1.onmessage = () => queue.shift()?.();
 const slice = () => new Promise((r) => { queue.push(r); channel.port2.postMessage(0); });
-export async function furnishUnit(floor, unitNumber, M, budget = 24) {
+// a breathe() to await in long loops: yields to the browser once `budget` ms have passed since the last yield
+export function breather(budget = 8) {
   let t0 = performance.now();
-  const breathe = async () => { if (performance.now() - t0 > budget) { await slice(); t0 = performance.now(); } };
+  return async () => { if (performance.now() - t0 > budget) { await slice(); t0 = performance.now(); } };
+}
+export async function furnishUnit(floor, unitNumber, M, budget = 8) {
+  const breathe = breather(budget);
   const g = new THREE.Group();
   const colliders = [];
   const rooms = classifyRooms(floor).filter((r) => r.unit.number === unitNumber);
@@ -552,11 +556,14 @@ export async function furnishUnit(floor, unitNumber, M, budget = 24) {
 // Common corridor / lift lobby of a floor-plan sheet (built once per sheet, at height 0).
 export async function furnishCommon(floor, M) {
   const g = new THREE.Group();
-  const rooms = (floor.sheet.rooms ?? []).filter((r) => r.area > 8 && !floor.units.some((u) => u.kind === 'apartment' && u.rects.some((q) => inside(q, r.label[0], r.label[1]))));
+  // (the 380 m² retail hall is not common space: it is let as shops, see shops.js)
+  const rooms = (floor.sheet.rooms ?? []).filter((r) => r.area > 8 && r.area < 200 && !floor.units.some((u) => u.kind === 'apartment' && u.rects.some((q) => inside(q, r.label[0], r.label[1]))));
   const solidLines = [...floor.sheet.walls, ...floor.sheet.openings.map((o) => o.rect)];
   const swings = floor.sheet.doorSwings ?? [];
   let seed = 3;
+  const breathe = breather();
   for (const r of rooms) {
+    await breathe();
     const room = { ...r, rect: r.inner ?? r.bbox };
     floorFinish(room, M.stone, 0, g);
     skirting(room, M.trim, 0, swings, g, floor.sheet.walls);
@@ -576,7 +583,7 @@ export async function furnishCommon(floor, M) {
     }
     g.add(F.group);
   }
-  return { group: await merge(g, async () => {}) };
+  return { group: await merge(g, breathe) };
 }
 
 // Closed (locked) doors in every doorway of the flat, taken from the door openings found in the plan:

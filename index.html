@@ -35,8 +35,28 @@
         <button id="u-view" class="primary">View apartment</button>
         <button id="u-tour" class="secondary">▶ Guided tour</button>
         <button id="u-walk" class="secondary">Walk inside</button>
+        <button id="u-pano" class="secondary" hidden>360° tour</button>
       </div>
     </section>
+
+    <!-- 360° tour of the photoreal show-flat / shop renders (src/pano/viewer.js) -->
+    <div id="pano" hidden>
+      <canvas class="pano-canvas"></canvas>
+      <div class="pano-spots"></div>
+      <div class="pano-top">
+        <div class="pano-title card"><b></b><span></span></div>
+        <div class="pano-actions"><button class="pano-3d">3D view</button><button class="pano-close" title="Close">×</button></div>
+      </div>
+      <div class="pano-room"></div>
+      <div class="pano-dock">
+        <canvas class="pano-plan"></canvas>
+        <div class="pano-side">
+          <div class="pano-note">Show-flat presentation · furniture and room proportions are illustrative, see the official plan for dimensions</div>
+          <nav class="pano-rooms"></nav>
+        </div>
+      </div>
+      <div class="pano-wait" hidden></div>
+    </div>
 
     <section class="card" id="plan" hidden>
       <div class="title"></div>
@@ -56,7 +76,7 @@
     </div>
 
     <div class="hint-bar" id="walk-hint"><span id="hint-text"></span>
-      <button id="walk-tour">▶ Tour</button><button id="walk-in">Walk inside</button><button id="exit-walk">Back</button></div>
+      <button id="walk-tour">▶ Tour</button><button id="walk-in">Walk inside</button><button id="walk-pano" hidden>360°</button><button id="exit-walk">Back</button></div>
 
     <div class="card" id="tour">
       <div id="tour-caption"></div>

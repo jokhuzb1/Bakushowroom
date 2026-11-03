@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { piecesAround, projectUV } from '../geo.js';
 import { levels, ROOF_Z, sheetIndexFor, unitsForFloor } from './units.js';
+import { insideShop } from './shops.js';
 
 export const CX = 17.5, CY = 9.1; // plan point that becomes the world origin
 const X = (x) => x - CX;
@@ -170,6 +171,8 @@ export function buildBuilding(data, M) {
     for (const r of sheet.walls) {
       if ((r[2] - r[0]) * (r[3] - r[1]) < 0.004) continue;
       if (lv.floor === 1 && r[1] < F[1] - 0.3) continue; // podium columns are modelled on the facade
+      // bay partitions inside a let shop are left out: each shop is fitted out as one space (shops.js)
+      if (lv.floor === 1 && insideShop(r)) continue;
       if (r[1] > F[3] + 0.3 || r[3] < box[1] - 0.3) continue; // dimension-line artwork outside the outline
       if (r[1] < box[1] - 0.05) {
         // the part in front of the stepped-back facade is a terrace divider: a low stone wall
@@ -306,7 +309,7 @@ export function buildBuilding(data, M) {
     g.add(hit);
 
     // walk colliders (world XZ boxes)
-    const colliders = sheet.walls.map((r) => ({ x0: X(r[0]), x1: X(r[2]), z0: Z(r[1]), z1: Z(r[3]) }));
+    const colliders = sheet.walls.filter((r) => !(lv.floor === 1 && insideShop(r))).map((r) => ({ x0: X(r[0]), x1: X(r[2]), z0: Z(r[1]), z1: Z(r[3]) }));
     for (const r of sheet.balconies) colliders.push({ x0: X(r[0]) - 0.1, x1: X(r[2]) + 0.1, z0: Z(r[1]) - 0.15, z1: Z(r[1]) - 0.05 }, { x0: X(r[0]) - 0.1, x1: X(r[2]) + 0.1, z0: Z(r[3]) + 0.05, z1: Z(r[3]) + 0.15 });
 
     root.add(g);
@@ -329,7 +332,8 @@ function buildPodium(data, M, F) {
   const colsX = [0, 3.2, 6.2, 9.4, 12.4, 15.2, 19.4, 22.6, 25.6, 28.8, 31.8, 35.0];
   // shop glazing set back behind the columns, warm interiors behind
   B.box(M.shopGlass, X(0.1), 0.3, Z(yK + 0.35), X(34.9), 3.85, Z(yK + 0.4));
-  B.box(M.shopInterior, X(0.1), 0.0, Z(yK + 1.6), X(34.9), 3.85, Z(yK + 1.65));
+  // the shops behind the glass are real interiors (shops.js); only the two lobbies keep a backdrop
+  for (const [a, b] of [[6.2, 9.4], [25.6, 28.8]]) B.box(M.shopInterior, X(a), 0.0, Z(yK + 1.6), X(b), 3.85, Z(yK + 1.65));
   for (let x = 0.1; x <= 34.95; x += 1.55) B.box(M.frame, X(x - 0.03), 0.3, Z(yK + 0.3), X(x + 0.03), 3.85, Z(yK + 0.42));
   B.box(M.frame, X(0.1), 3.0, Z(yK + 0.3), X(34.9), 3.06, Z(yK + 0.42));
   // sign band and plinth

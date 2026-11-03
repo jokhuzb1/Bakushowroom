@@ -11,14 +11,14 @@ import { buildBuilding, CX, CY } from './model.js';
 import { buildSite } from './site.js';
 import { buildComplex } from './complex.js';
 import { Walk } from '../walk.js';
-import { loadTextures, loadScannedTextures } from '../textures.js';
-import { createMaterials, applyScanned } from '../materials.js';
 import { furnishUnit, furnishCommon } from './interior.js';
 import { buildShowflat } from './showflat.js';
+import { buildShop, shopKindLabel, insideShop } from './shops.js';
+import { loadInteriorKit } from './kit.js';
 import { UnitPlan } from './unitplan.js';
-import { loadModels } from './models.js';
-import * as STYLE from '../styles/warmMinimal.js';
 import { NavAids, nameOf } from './navaids.js';
+import { PanoViewer } from '../pano/viewer.js';
+import { panoId, hasPano } from '../pano/units.js';
 import './building.css';
 
 const $ = (s) => document.querySelector(s);
@@ -109,7 +109,7 @@ async function init() {
     const og = new THREE.Group();
     og.visible = false;
     for (const u of f.units) {
-      u.status = u.kind === 'retail' ? 'commercial' : 'available';
+      u.status = u.kind === 'shop' ? 'commercial' : 'available';
       const mat = new THREE.MeshBasicMaterial({ color: STATUS[u.status].color, transparent: true, opacity: BASE, depthWrite: false });
       const line = new THREE.LineBasicMaterial({ color: STATUS[u.status].color });
       for (const r of u.rects) {
@@ -174,12 +174,13 @@ async function init() {
 
   // ---------- UI ----------
   const total = B.floors.reduce((a, f) => a + f.units.filter((u) => u.kind === 'apartment').length, 0);
-  $('#meta').textContent = `16 floors · ${total} apartments · retail ground floor`;
+  const shopCount = B.floors[0].units.filter((u) => u.kind === 'shop').length;
+  $('#meta').textContent = `16 floors · ${total} apartments · ${shopCount} shops`;
   const list = $('#floors');
   for (const f of [...B.floors].reverse()) {
     const li = document.createElement('li');
     const n = f.units.filter((u) => u.kind === 'apartment').length;
-    li.innerHTML = `<b>${f.floor}</b><span>${f.floor === 1 ? `Retail + ${n} flats` : `${n} apartments`}</span><i>${f.z.toFixed(2)} m</i>`;
+    li.innerHTML = `<b>${f.floor}</b><span>${f.floor === 1 ? `${shopCount} shops + ${n} flats` : `${n} apartments`}</span><i>${f.z.toFixed(2)} m</i>`;
     li.onclick = () => openFloor(f.floor);
     li.onmouseenter = () => { if (mode === 'building') hoverFloor(f.floor); };
     li.onmouseleave = () => { if (mode === 'building') hoverFloor(null); };
@@ -207,27 +208,7 @@ async function init() {
   // lightweight instance sharing the same geometry. Only what is being looked at is ever built.
   let IM = null;
   const types = new Map();
-  const loadInteriorMaterials = () => (IM ??= Promise.all([loadTextures(), loadModels(), loadScannedTextures()]).then(([tex, lib, scanned]) => {
-    const K = createMaterials(tex);
-    applyScanned(K, scanned);
-    STYLE.palette(K);
-    // real plaster on every wall of the building (its UVs were laid out at 1.5 m per repeat)
-    const p = scanned.beige_wall_001;
-    if (p?.map) {
-      for (const k of ['map', 'roughnessMap', 'normalMap']) {
-        if (!p[k]) continue;
-        const t = p[k].clone();
-        t.repeat.setScalar(1.5 / p.world);
-        t.needsUpdate = true;
-        M.wall[k] = t;
-      }
-      M.wall.color.setRGB(1.32, 1.3, 1.28); // the scan is darker and warmer than the soft off-white paint we want
-      M.wall.normalScale = new THREE.Vector2(0.5, 0.5);
-      M.wall.needsUpdate = true;
-      invalidate();
-    }
-    return Object.assign(K, { lib });
-  }));
+  const loadInteriorMaterials = () => (IM ??= loadInteriorKit(M).then((K) => { invalidate(); return K; }));
   function unitType(f, number) {
     const key = data.sheets.indexOf(f.sheet) + ':' + number;
     if (!types.has(key)) {
@@ -241,8 +222,52 @@ async function init() {
     }
     return types.get(key);
   }
+  // Ground-floor shops: fitted out once the interior kit is ready and always shown behind the shop windows
+  // (they are part of the street front); walking inside uses a lit copy, built on first walk-in.
+  let shopBuilds = null;
+  const shopsRoot = new THREE.Group();
+  shopsRoot.name = 'shops';
+  B.root.add(shopsRoot);
+  function shopsReady() {
+    shopBuilds ??= loadInteriorMaterials().then((K) => {
+      const out = new Map();
+      for (const u of B.floors[0].units.filter((x) => x.kind === 'shop')) {
+        const s = buildShop(u.shop, K);
+        clipMaterials(s.group);
+        shopsRoot.add(s.group);
+        out.set(u.id, s);
+      }
+      refreshShadows();
+      return out;
+    });
+    return shopBuilds;
+  }
+  const shopWalks = new Map();
+  function shopWalkFor(u) {
+    if (!shopWalks.has(u.id)) {
+      shopWalks.set(u.id, shopsReady().then((built) => {
+        const s = built.get(u.id);
+        const group = new THREE.Group();
+        for (const m of s.group.children) {
+          const c = new THREE.Mesh(m.geometry, m.material);
+          c.castShadow = m.castShadow;
+          c.receiveShadow = true;
+          group.add(c);
+        }
+        group.add(s.lights.clone());
+        group.visible = false;
+        scene.add(group);
+        return { ...s, group };
+      }));
+    }
+    return shopWalks.get(u.id);
+  }
   // the furnished instance of one apartment (built from its type on first use)
   async function ensureUnit(f, u) {
+    if (u.kind === 'shop') {
+      const s = (await shopsReady()).get(u.id);
+      return { group: s.group, colliders: s.colliders, rooms: s.rooms.map((r) => ({ ...r, unit: u })), walls: s.sheet.walls };
+    }
     f.interior ??= { group: Object.assign(new THREE.Group(), { visible: false }), units: new Map() };
     if (!f.interior.group.parent) { f.interior.group.position.y = f.z; B.root.add(f.interior.group); }
     if (f.interior.units.has(u.number)) return f.interior.units.get(u.number);
@@ -289,7 +314,11 @@ async function init() {
     return f.interior;
   }
   // only the textures/materials are warmed up after start-up; furniture is built on demand
-  const warmUp = () => loadInteriorMaterials().then(() => { T.materialsReady = Math.round(performance.now()); });
+  // shaders for the interior materials are compiled in the background too, so opening the first floor
+  // doesn't stall on them
+  let holdFrames = false;
+  const warmUp = () => loadInteriorMaterials().then(() => { T.materialsReady = Math.round(performance.now()); return shopsReady(); })
+    .then(() => renderer.compileAsync(scene, camera)).catch((e) => console.warn('precompile', e));
   // While nobody is interacting, pre-build the apartment types of the typical floors (4-5, 6-10, 11-16:
   // about 80% of all flats), one flat at a time, so most floors open instantly. Any input pauses it.
   let lastInput = performance.now();
@@ -316,7 +345,7 @@ async function init() {
   function capsFor(f) {
     if (f.caps) return f.caps;
     const geos = f.sheet.walls
-      .filter((r) => (r[2] - r[0]) * (r[3] - r[1]) > 0.004 && r[1] > f.box[1] - 0.3 && r[1] < f.box[3] + 0.3)
+      .filter((r) => (r[2] - r[0]) * (r[3] - r[1]) > 0.004 && r[1] > f.box[1] - 0.3 && r[1] < f.box[3] + 0.3 && !(f.floor === 1 && insideShop(r)))
       .map((r) => new THREE.PlaneGeometry(r[2] - r[0], r[3] - r[1]).rotateX(-Math.PI / 2).translate((r[0] + r[2]) / 2 - CX, 0, (r[1] + r[3]) / 2 - CY));
     f.caps = new THREE.Mesh(mergeGeometries(geos), capMat);
     f.caps.position.y = f.z + CUT_H - 0.003;
@@ -403,8 +432,12 @@ async function init() {
   function showUnit(u) {
     invalidate();
     panel.hidden = false;
-    $('#u-code').textContent = u.kind === 'retail' ? 'Retail hall' : `Apartment ${u.code}`;
-    $('#u-type').textContent = u.kind === 'retail' ? 'Ground floor shops' : `${u.rooms ?? '–'}-room · plan №${u.number}`;
+    const shop = u.kind === 'shop';
+    $('#u-code').textContent = shop ? u.shop.brand : `Apartment ${u.code}`;
+    $('#u-type').textContent = shop ? `${shopKindLabel(u.shop)} · ${u.shop.tagline}` : `${u.rooms ?? '–'}-room · plan №${u.number}`;
+    $('#u-view').textContent = shop ? 'View shop' : 'View apartment';
+    $('#u-tour').hidden = shop;
+    $('#u-pano').hidden = !hasPano(u);
     $('#u-area').textContent = u.area ? `${u.area.toFixed(2)} m²` : '–';
     $('#u-floor').textContent = `${u.floor}`;
     $('#u-status').textContent = STATUS[u.status].label;
@@ -415,7 +448,6 @@ async function init() {
   }
   let selectedUnit = null;
   function focusUnit(u) {
-    if (u.kind !== 'apartment') return;
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const r of u.rects) { x0 = Math.min(x0, r[0]); y0 = Math.min(y0, r[1]); x1 = Math.max(x1, r[2]); y1 = Math.max(y1, r[3]); }
     const c = new THREE.Vector3((x0 + x1) / 2 - CX, current.z + 0.5, (y0 + y1) / 2 - CY);
@@ -630,7 +662,8 @@ async function init() {
     studioFloor.position.set((b[0] + b[2]) / 2 - CX, f.z - 0.32, (b[1] + b[3]) / 2 - CY);
     surroundings(false);
     refreshShadows();
-    plan.open({ unit: u, rooms: ui.rooms, walls: f.sheet.walls, furniture: ui.colliders });
+    plan.open({ unit: u, rooms: ui.rooms, walls: ui.walls ?? f.sheet.walls, furniture: ui.colliders });
+    $('#walk-pano').hidden = !hasPano(u);
     orbit.enabled = true;
     orbit.minDistance = 3;
     $('#hint-text').textContent = 'Drag to turn · scroll to zoom · click a room to focus on it';
@@ -693,7 +726,8 @@ async function init() {
   async function walkInto(u) {
     if (mode !== 'unit' || walkCtx?.u !== u) await enterUnit(u);
     $('#hint-text').textContent = 'Preparing walk-through…';
-    const sf = await showflatFor(walkCtx.f, u);
+    const sf = u.kind === 'shop' ? await shopWalkFor(u) : await showflatFor(walkCtx.f, u);
+    shopsRoot.visible = false; // the walk copy (with its lights) stands in for the street-front shops
     const realF = walkCtx.f;
     // walk the show-flat: the real building floors step aside, the enlarged flat takes their place
     sf.group.position.y = realF.z;
@@ -727,6 +761,10 @@ async function init() {
     camera.fov = WALK_FOV;
     camera.updateProjectionMatrix();
     interiorLight(true);
+    // the show-flat's room lights change the lighting set-up, which recompiles every shader: do that off
+    // the main thread (parallel compile) with frames held, instead of freezing on the first walk frame
+    holdFrames = true;
+    try { await renderer.compileAsync(scene, camera); } finally { holdFrames = false; }
     $('#hint-text').textContent = 'Click a room sign or the floor to go there · drag to look around';
     const living = ui.rooms.find((r) => r.type === 'living');
     const v = living ? viewFor(living, [cx, cz]) : { target: [cx, cz], yaw: north ? 0 : Math.PI, pitch: -0.05 };
@@ -735,6 +773,7 @@ async function init() {
   function leaveWalk() {
     walk.enabled = false;
     if (walkCtx?.sf) walkCtx.sf.group.visible = false;
+    shopsRoot.visible = true;
     aids.close();
     walk.frame(0);
     camera.fov = 40;
@@ -801,6 +840,19 @@ async function init() {
   $('#walk-tour').onclick = () => walkCtx && startTour(walkCtx.u);
   $('#walk-in').onclick = () => walkCtx && walkInto(walkCtx.u);
   $('#tour-stop').onclick = stopTour;
+
+  // ---------- 360° tour (photoreal renders of floors 1-2 and the shops) ----------
+  const allUnits = B.floors.flatMap((f) => f.units);
+  const pano = new PanoViewer($('#pano'), {
+    // "3D view" from the tour: walk the same flat or shop in real time
+    on3D: (id) => { const u = allUnits.find((x) => panoId(x) === id); if (u) walkInto(u); },
+  });
+  const openPano = (u, stop = null) => { if (u && hasPano(u)) { stopTour(); pano.open(panoId(u), stop); } };
+  $('#u-pano').onclick = () => openPano(selectedUnit);
+  $('#walk-pano').onclick = () => openPano(walkCtx?.u);
+  // shareable link: #pano=<tour id>/<room>
+  const deep = location.hash.match(/^#pano=([\w-]+)(?:\/([\w-]+))?/);
+  if (deep) openPano(allUnits.find((x) => panoId(x) === deep[1]), deep[2]);
   // Back: walk -> apartment -> floor -> building
   const goBack = () => {
     if (mode === 'walk') enterUnit(walkCtx.u);
@@ -846,7 +898,7 @@ async function init() {
       }
       tip.hidden = !u;
       if (u) {
-        tip.innerHTML = u.kind === 'retail' ? '<b>Retail hall</b> · 380.89 m²' : `<b>${u.code}</b> · ${u.rooms}-room · ${u.area?.toFixed(1)} m²`;
+        tip.innerHTML = u.kind === 'shop' ? `<b>${u.shop.brand}</b> · ${shopKindLabel(u.shop)} · ${u.area.toFixed(1)} m²` : `<b>${u.code}</b> · ${u.rooms}-room · ${u.area?.toFixed(1)} m²`;
         tip.style.transform = `translate(${e.clientX + 14}px, ${e.clientY + 14}px)`;
       }
       canvas.style.cursor = u ? 'pointer' : '';
@@ -874,12 +926,21 @@ async function init() {
   prebuildIdle();
   document.body.dataset.mode = 'building';
 
+  const SHOPFRONT = new THREE.Vector3(17.5 - CX, 2, -4.4 - CY);
+  // the scene renders into the composer's targets, so the resolution changes there, not just on the canvas
+  // (render targets are reallocated, so small steps are ignored)
+  function setResolution(pr) {
+    if (Math.abs(composer._pixelRatio - pr) < 0.05) return;
+    renderer.setPixelRatio(pr);
+    composer.setPixelRatio(pr);
+  }
   const clock = new THREE.Timer();
   const lastCam = new THREE.Matrix4();
   let stillSince = 0, scale = 1, slowFrames = 0, fastFrames = 0, lastFast = 0;
   function frame(t) {
     requestAnimationFrame(frame); // schedule first so one bad frame can't stop the loop
     clock.update(t);
+    if (document.body.dataset.pano || holdFrames) { needFull = true; return; } // 360° tour open / shaders compiling
     const dt = Math.min(clock.getDelta(), 0.05);
     const now = performance.now();
     fitToWindow();
@@ -900,21 +961,28 @@ async function init() {
     if ((mode === 'walk' || mode === 'unit') && walkCtx) plan.draw(camera, walk);
     if (mode === 'walk' && walkCtx) aids.update(t / 1000, plan.roomAt(walk.pos.x + CX, walk.pos.y + CY));
     camera.updateMatrixWorld();
+    // the furnished shops behind the street windows (~150 draw calls) only show up close
+    if (mode !== 'walk') {
+      const near = mode !== 'building' || camera.position.distanceTo(SHOPFRONT) < 70;
+      // (no shadow refresh: the shops sit indoors under the podium, re-rendering the shadow map mid-orbit hitches)
+      if (shopsRoot.visible !== near) { shopsRoot.visible = near; invalidate(); }
+    }
     const camMoved = !lastCam.equals(camera.matrixWorld);
     if (camMoved) lastCam.copy(camera.matrixWorld);
     if (camMoved || tween || now < motionUntil) {
-      // moving: direct render (no AO / MSAA), resolution adapted to keep the frame rate up
+      // moving: no ambient occlusion (about three quarters of the frame cost at full HD), MSAA kept,
+      // resolution adapted to keep the frame rate up; AO comes back on the settled frame
       const gap = now - lastFast;
       lastFast = now;
       // only sustained slowness lowers the resolution (one-off spikes, e.g. building an interior, don't),
-      // never below 75%, and it recovers quickly
+      // never below 60%, and it recovers quickly
       if (gap < 100) {
-        if (gap > 24) { fastFrames = 0; if (++slowFrames >= 8) { scale = Math.max(0.75, scale * 0.9); slowFrames = 0; } }
+        if (gap > 24) { fastFrames = 0; if (++slowFrames >= 6) { scale = Math.max(0.6, scale * 0.88); slowFrames = 0; } }
         else if (gap < 18) { slowFrames = 0; if (++fastFrames >= 15) { scale = Math.min(1, scale * 1.1); fastFrames = 0; } }
       }
-      const pr = Math.max(0.75, dpr * scale);
-      if (Math.abs(renderer.getPixelRatio() - pr) > 0.01) renderer.setPixelRatio(pr);
-      // same look while moving as when still (AO + MSAA); only the resolution adapts
+      const pr = Math.max(0.6, Math.min(dpr, 1.5) * scale);
+      setResolution(pr);
+      gtao.enabled = false;
       composer.render();
       stillSince = now;
       needFull = true;
@@ -922,8 +990,9 @@ async function init() {
     } else if (needFull && now - stillSince > 150) {
       // settled: one full-quality frame, then nothing until something changes
       scale = 1;
-      if (renderer.getPixelRatio() !== dpr) renderer.setPixelRatio(dpr);
+      setResolution(dpr);
       setMoving(false);
+      gtao.enabled = true;
       composer.render();
       needFull = false;
     }

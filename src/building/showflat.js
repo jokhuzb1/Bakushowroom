@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { mergeGeometries as BufferGeometryUtilsMerge } from 'three/addons/utils/BufferGeometryUtils.js';
 import { box as gbox, cyl, mesh } from '../geo.js';
-import { furnishUnit } from './interior.js';
+import { furnishUnit, breather } from './interior.js';
 import { CX, CY } from './model.js';
 
 export const SCALE = 1.35;
@@ -139,6 +139,7 @@ function showflatKit(M) {
     const L = new THREE.TextureLoader();
     const tex = (f, srgb) => { const t = L.load(`/textures/ph/herringbone_parquet_${f}.webp`); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace; t.anisotropy = 8; t.userData.world = 2.6; return t; };
     parquet = std({ map: tex('diff', true), roughnessMap: tex('rough', false), normalMap: tex('nor', false), color: 0xe2cfb2, roughness: 0.45, envMapIntensity: 0.5, metalness: 0.05, normalScale: new THREE.Vector2(0.5, 0.5) });
+    parquet.name = 'parquet'; // the 360° bake gives it a satin (not wet) finish for the path tracer
   }
   SM.oak = parquet;
   // walls: matte off-white plaster (keeps the scanned plaster relief)
@@ -147,6 +148,7 @@ function showflatKit(M) {
     m.color.set(0xf4f4f2).multiplyScalar(1.25); // the scan is darker than the paint
     m.roughness = 0.88;
     m.metalness = 0.02;
+    m.name = 'plaster'; // colour above 1 brightens the dark scan; glTF clamps it, so the 360° bake repaints it
     return m;
   };
   return SM;
@@ -158,6 +160,7 @@ export async function buildShowflat(floor, unit, M, wallMat) {
   const SM = showflatKit(M);
   wallMat = SM.plaster(wallMat);
   const tpl = await furnishUnit(SF, unit.number, SM);
+  const breathe = breather(); // the shell is built in slices too, so walking in never freezes the view
   const g = new THREE.Group();
   g.add(tpl.group);
   const shell = new THREE.Group();
@@ -168,6 +171,7 @@ export async function buildShowflat(floor, unit, M, wallMat) {
   for (const q of SF.unit.rects) ub = [Math.min(ub[0], q[0]), Math.min(ub[1], q[1]), Math.max(ub[2], q[2]), Math.max(ub[3], q[3])];
 
   for (const r of SF.sheet.walls) {
+    await breathe();
     if ((r[2] - r[0]) * (r[3] - r[1]) < 0.003) continue;
     shell.add(gbox(r[2] - r[0], H, r[3] - r[1], wallMat, X((r[0] + r[2]) / 2), H / 2, Z((r[1] + r[3]) / 2)));
     const c = { x0: X(r[0]), x1: X(r[2]), z0: Z(r[1]), z1: Z(r[3]) };
@@ -175,6 +179,7 @@ export async function buildShowflat(floor, unit, M, wallMat) {
   }
   const frameMat = M.frame ?? M.blackMetal;
   for (const o of SF.sheet.openings) {
+    await breathe();
     const r = o.rect, w = r[2] - r[0], d = r[3] - r[1], cx = X((r[0] + r[2]) / 2), cz = Z((r[1] + r[3]) / 2);
     if (o.kind === 'door') {
       shell.add(gbox(w, H - 2.15, d, wallMat, cx, (H + 2.15) / 2, cz));
@@ -211,6 +216,7 @@ export async function buildShowflat(floor, unit, M, wallMat) {
     const T = 0.24;
     const opens = SF.sheet.openings.map((o) => o.rect);
     for (const q of SF.unit.rects) {
+      await breathe();
       const edges = [[q[0], q[1], q[2], q[1], 0, -1], [q[0], q[3], q[2], q[3], 0, 1], [q[0], q[1], q[0], q[3], -1, 0], [q[2], q[1], q[2], q[3], 1, 0]];
       for (const [ax, ay, bx, by, nx, ny] of edges) {
         const horiz = ay === by;
@@ -262,6 +268,7 @@ export async function buildShowflat(floor, unit, M, wallMat) {
   const poolMat = new THREE.MeshBasicMaterial({ map: poolTexture(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.4, side: THREE.DoubleSide });
   const lights = new THREE.Group();
   for (const room of tpl.rooms) {
+    await breathe();
     if (room.type === 'balcony') continue;
     const q = room.inner ?? room.bbox, rw = q[2] - q[0], rd = q[3] - q[1];
     const cx = X((q[0] + q[2]) / 2), cz = Z((q[1] + q[3]) / 2);
@@ -321,28 +328,31 @@ export async function buildShowflat(floor, unit, M, wallMat) {
     lights.add(sp, sp.target);
     shell.add(cyl(0.045, 0.045, 0.03, SM.frameBlack, sp.position.x, H - 0.015, sp.position.z, 20, { cast: false }));
   }
-  g.add(merge(shell), lights);
+  g.add(await merge(shell, breathe), lights);
   const units = SF.unit;
   return { group: g, colliders, wallColliders, rooms: tpl.rooms, sheet: SF.sheet, unit: units, h: H };
 }
 
 // merge the shell into one mesh per material (it is static)
-function merge(group) {
+async function merge(group, breathe) {
   group.updateMatrixWorld(true);
   const by = new Map();
-  group.traverse((o) => {
-    if (!o.isMesh) return;
+  const meshes = [];
+  group.traverse((o) => { if (o.isMesh) meshes.push(o); });
+  for (const o of meshes) {
+    await breathe();
     const geo = (o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone()).applyMatrix4(o.matrixWorld);
     for (const k of Object.keys(geo.attributes)) if (!['position', 'normal', 'uv'].includes(k)) geo.deleteAttribute(k);
     if (!by.has(o.material)) by.set(o.material, []);
     by.get(o.material).push(geo);
-  });
+  }
   const out = new THREE.Group();
   for (const [mat, list] of by) {
     const m = new THREE.Mesh(BufferGeometryUtilsMerge(list), mat);
     m.castShadow = !mat.transparent;
     m.receiveShadow = true;
     out.add(m);
+    await breathe();
   }
   return out;
 }

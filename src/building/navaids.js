@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { CX, CY } from './model.js';
 
 const NAMES = { living: 'Living & kitchen', bedroom: 'Bedroom', bath: 'Bathroom', hall: 'Hall', balcony: 'Balcony' };
-const nameOf = (r) => (r.kids ? "Children's room" : NAMES[r.type] ?? 'Room');
+const nameOf = (r) => r.name ?? (r.kids ? "Children's room" : NAMES[r.type] ?? 'Room');
 
 export class NavAids {
   constructor({ scene, camera, canvas, layer, pad, walk, onGo, onChange = () => {} }) {

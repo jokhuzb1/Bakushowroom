@@ -1,3 +1,5 @@
+import { SHOPS, SHOP_Y0, SHOP_Y1 } from './shops.js';
+
 // Building levels and apartment boundaries, read from the "Baku City" 16-floor drawings (sheets 3-10).
 // Plan coordinates in meters: x east from grid axis 1, y south from grid axis И (north facade line).
 
@@ -44,7 +46,6 @@ const GROUND = {
   4: [[19.4, 10.2, 25.6, 18.2]],
   3: [[25.6, 10.2, 35, 18.2], [29.4, 8.0, 35, 10.2]],
 };
-const RETAIL = [[0, -4.4, 35, 8.0]];
 
 export function unitsForFloor(floor, sheet) {
   const map = floor === 1 ? GROUND : floor <= 3 ? PODIUM : TYPICAL;
@@ -62,6 +63,9 @@ export function unitsForFloor(floor, sheet) {
       kind: 'apartment',
     };
   });
-  if (floor === 1) units.push({ id: '1-retail', floor, number: 0, code: 'R1', rooms: null, area: 380.89, rects: RETAIL, kind: 'retail' });
+  // the retail podium is let as separate shops (see shops.js)
+  if (floor === 1) for (const s of SHOPS) {
+    units.push({ id: `shop-${s.slug}`, floor, number: 100 + SHOPS.indexOf(s), code: s.brand, rooms: null, area: +((s.x1 - s.x0) * (SHOP_Y1 - SHOP_Y0)).toFixed(1), rects: [[s.x0, SHOP_Y0, s.x1, SHOP_Y1]], kind: 'shop', shop: s });
+  }
   return units;
 }
