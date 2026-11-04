@@ -2,12 +2,81 @@
 // and low-detail neighbouring blocks in the same cream stone.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { rand } from '../textures.js';
+import { rand, fbm } from '../textures.js';
 import { CX, CY } from './model.js';
 import { facadeTexture } from './complex.js';
 import { buildBackdrop } from './backdrop.js';
 
 const X = (x) => x - CX, Z = (y) => y - CY;
+
+// Ground cover: a tiling noise texture (world metres per repeat) so lawns and roads aren't flat colour.
+// `grain` adds fine speckle (asphalt aggregate, paving joints) over the soft blotches.
+function groundTex(base, { blotch = 0.12, grain = 0.06, joints = 0, seed = 1 } = {}) {
+  const S = 512, c = document.createElement('canvas');
+  c.width = c.height = S;
+  const g = c.getContext('2d');
+  const img = g.createImageData(S, S), d = img.data;
+  const col = new THREE.Color(base), R = rand(seed);
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const u = x / S, v = y / S;
+      let k = 1 + (fbm(u, v, 4, 4, 4, seed) - 0.5) * 2 * blotch + (R() - 0.5) * 2 * grain;
+      if (joints && (x % (S / joints) < 2 || y % (S / joints) < 2)) k *= 0.82;
+      const i = (y * S + x) * 4;
+      d[i] = Math.min(255, col.r * 255 * k); d[i + 1] = Math.min(255, col.g * 255 * k); d[i + 2] = Math.min(255, col.b * 255 * k); d[i + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
+const repeat = (t, w, d, metres) => { const c = t.clone(); c.repeat.set(w / metres, d / metres); c.needsUpdate = true; return c; };
+
+// Soft, lumpy foliage: geometry centred on the origin is pushed in and out by smooth noise and given vertex
+// colours from the shaded underside to the sunlit top, with a per-tree tint, so a row of trees doesn't read
+// as identical faceted green balls.
+const DARK_LEAF = new THREE.Color(0x15260e), LIGHT_LEAF = new THREE.Color(0x4f7d28);
+function foliage(geo, R, { lumps = 2.2, amp = 0.16, dark = DARK_LEAF, light = LIGHT_LEAF } = {}) {
+  geo.computeBoundingBox();
+  const { min, max } = geo.boundingBox;
+  const p = geo.attributes.position, col = new Float32Array(p.count * 3);
+  const ph = [R() * 9, R() * 9, R() * 9], tint = 0.85 + R() * 0.3;
+  const v = new THREE.Vector3(), c = new THREE.Color();
+  for (let i = 0; i < p.count; i++) {
+    v.fromBufferAttribute(p, i);
+    const t = (v.y - min.y) / (max.y - min.y);
+    v.multiplyScalar(1 + amp * Math.sin(v.x * lumps + ph[0]) * Math.sin(v.y * lumps + ph[1]) * Math.sin(v.z * lumps + ph[2]));
+    p.setXYZ(i, v.x, v.y, v.z);
+    c.copy(dark).lerp(light, t ** 0.8).multiplyScalar(tint);
+    col.set([c.r, c.g, c.b], i * 3);
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+// a broadleaf canopy of a few overlapping lobes
+function canopy(R, s) {
+  const lobes = [];
+  const n = 3 + Math.floor(R() * 3);
+  for (let i = 0; i < n; i++) {
+    const r = s * (0.55 + R() * 0.25), a = R() * Math.PI * 2, off = i === 0 ? 0 : s * 0.45;
+    lobes.push(foliage(new THREE.SphereGeometry(r, 18, 12), R, { lumps: 2.6 / s })
+      .translate(Math.cos(a) * off, (R() - 0.3) * s * 0.4, Math.sin(a) * off));
+  }
+  return mergeGeometries(lobes);
+}
+// a slim Italian cypress: a pointed lathe profile, finely lumped
+function cypress(R, h) {
+  const pts = [];
+  for (let i = 0; i <= 14; i++) {
+    const t = i / 14;
+    pts.push(new THREE.Vector2(0.62 * Math.sin(Math.PI * Math.min(1, t * 1.15)) ** 0.7 * (1 - t * 0.55) + 0.01, (t - 0.5) * h));
+  }
+  return foliage(new THREE.LatheGeometry(pts, 14), R, { lumps: 7, amp: 0.1, dark: new THREE.Color(0x1c2e19), light: new THREE.Color(0x4d6b38) });
+}
 
 function facadeTex(seed) {
   const S = 256, c = document.createElement('canvas');
@@ -55,13 +124,20 @@ export const STREET_VIEWS = [
 export function buildSite() {
   const root = new THREE.Group();
   const std = (p) => new THREE.MeshStandardMaterial(p);
-  const asphalt = std({ color: 0x55575a, roughness: 0.95 });
-  const paving = std({ color: 0xb9b2a6, roughness: 0.9 });
-  const grass = std({ color: 0x6c8650, roughness: 1 });
+  // ground textures tile every `metres` (plane UVs are scaled to world size below)
+  const ground = (base, metres, o) => Object.assign(std({ map: groundTex(base, o), roughness: o.rough ?? 0.95 }), { userData: { metres } });
+  const asphalt = ground(0x4d4f52, 6, { blotch: 0.1, grain: 0.09, seed: 3 });
+  const paving = ground(0xc2bbaf, 4, { blotch: 0.06, grain: 0.03, joints: 8, seed: 5, rough: 0.9 });
+  const grass = ground(0x5f7c45, 9, { blotch: 0.22, grain: 0.08, seed: 9, rough: 1 });
   const paint = std({ color: 0xe8e6df, roughness: 0.8 });
 
   const plane = (w, d, mat, x, y, z) => {
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d).rotateX(-Math.PI / 2), mat);
+    const geo = new THREE.PlaneGeometry(w, d).rotateX(-Math.PI / 2);
+    if (mat.userData.metres) {
+      const uv = geo.attributes.uv;
+      for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) * w) / mat.userData.metres, (uv.getY(i) * d) / mat.userData.metres);
+    }
+    const m = new THREE.Mesh(geo, mat);
     m.position.set(x, y, z);
     m.receiveShadow = true;
     root.add(m);
@@ -99,11 +175,10 @@ export function buildSite() {
   // cypress trees and lamp posts along the shop front
   const R = rand(77);
   const cyp = [], trunks = [], poles = [], lamps = [];
-  const cone = new THREE.ConeGeometry(0.55, 1, 10);
   for (let x = 1.6; x < 82; x += 3.2) {
     if (x > 35 && x < 47.5) continue; // garden opening
     const h = 4.2 + R() * 1.4;
-    cyp.push(cone.clone().scale(1, h, 1).translate(X(x), 0.4 + h / 2, Z(-8.2)));
+    cyp.push(cypress(R, h).translate(X(x), 0.4 + h / 2, Z(-8.2)));
     trunks.push(new THREE.CylinderGeometry(0.08, 0.1, 0.5, 6).translate(X(x), 0.25, Z(-8.2)));
   }
   for (let x = -1; x < 82; x += 6.4) {
@@ -118,7 +193,7 @@ export function buildSite() {
   for (let z = -12; z < 100; z += 7) spots.push([-27, z]);
   for (const [x, z] of spots) {
     const s = 1.5 + R() * 1.2;
-    round.push(new THREE.IcosahedronGeometry(s, 1).translate(x, 2.4 + s, z));
+    round.push(canopy(R, s).translate(x, 2.4 + s, z));
     trunks.push(new THREE.CylinderGeometry(0.12, 0.16, 2.6, 6).translate(x, 1.3, z));
   }
   // garden gazebos with red domes between 3A and the corner block
@@ -138,8 +213,8 @@ export function buildSite() {
     m.receiveShadow = true;
     root.add(m);
   };
-  add(cyp, std({ color: 0x2f4b2a, roughness: 0.9, flatShading: true }));
-  add(round, std({ color: 0x4d6a3b, roughness: 0.9, flatShading: true }));
+  add(cyp, std({ vertexColors: true, roughness: 0.85 }));
+  add(round, std({ vertexColors: true, roughness: 0.85 }));
   add(trunks, std({ color: 0x4a3a2c, roughness: 1 }));
   add(poles, std({ color: 0x1f1f1f, metalness: 0.5, roughness: 0.5 }));
   add(lamps, std({ color: 0xfff3dc, emissive: 0xffe2b0, emissiveIntensity: 0.8 }));

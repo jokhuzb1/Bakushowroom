@@ -3,8 +3,12 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { SSAARenderPass } from 'three/addons/postprocessing/SSAARenderPass.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
+import { WebGLPathTracer, DenoiseMaterial } from 'three-gpu-pathtracer';
+import { ParallelMeshBVHWorker } from 'three-mesh-bvh/worker';
 import { makeSky } from '../textures.js';
 import { buildingMaterials } from './materials.js';
 import { buildBuilding, CX, CY } from './model.js';
@@ -29,8 +33,11 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPrefer
 const dpr = Math.min(devicePixelRatio, 2);
 renderer.setPixelRatio(dpr);
 renderer.setSize(innerWidth, innerHeight);
-renderer.toneMapping = THREE.NeutralToneMapping;
-renderer.toneMappingExposure = 0.66;
+// outdoor look: AgX (filmic, photographic highlight roll-off) with little flat fill, so the sun and the
+// ambient occlusion give the facades their depth
+const OUTDOOR = { toneMapping: THREE.AgXToneMapping, exposure: 0.85, env: 0.45, hemi: 0.25, sun: 5 };
+renderer.toneMapping = OUTDOOR.toneMapping;
+renderer.toneMappingExposure = OUTDOOR.exposure;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.localClippingEnabled = true;
@@ -40,7 +47,13 @@ const cut = new THREE.Plane(new THREE.Vector3(0, -1, 0), 1e6);
 // rooms, other floors). Planes are always present (parked far away when unused) so materials never recompile.
 const roomClip = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]].map((n) => new THREE.Plane(new THREE.Vector3(...n), 1e6));
 const clipPlanes = [cut, ...roomClip];
-const clipMaterials = (root) => root.traverse((o) => { if (o.material && !o.material.isLineBasicMaterial) o.material.clippingPlanes = clipPlanes; });
+// clipShadows: what the cut hides must not shade the open floor either (blotchy ceiling shadows otherwise).
+// Every interior passes through here, so its textures also get full anisotropic filtering: floors and walls
+// seen at a grazing angle stay sharp instead of smearing.
+const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
+const TEX_KEYS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap'];
+const sharpen = (m) => { for (const k of TEX_KEYS) if (m[k] && m[k].anisotropy < MAX_ANISO) { m[k].anisotropy = MAX_ANISO; m[k].needsUpdate = true; } };
+const clipMaterials = (root) => root.traverse((o) => { if (o.material && !o.material.isLineBasicMaterial) { Object.assign(o.material, { clippingPlanes: clipPlanes, clipShadows: true }); sharpen(o.material); } });
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.1, 2000);
@@ -62,21 +75,24 @@ async function init() {
   await new Promise((r) => setTimeout(r, 0));
 
   // light: late-afternoon sun from the north-west so the shop facade is lit, as in the render
-  const sunDir = new THREE.Vector3(-0.35, 0.62, -0.7).normalize();
-  const sky = makeSky(sunDir);
+  const sunDir = new THREE.Vector3(-0.6, 0.55, -0.6).normalize();
+  // a deeper blue than the default: AgX greys out pale skies
+  const sky = makeSky(sunDir, 1024, 512, { zenith: [0.12, 0.3, 0.85], horizon: [0.62, 0.76, 0.95] });
   mark('sky');
   scene.environment = sky;
   scene.background = sky;
-  const sun = new THREE.DirectionalLight(0xffe6c7, 3.8);
+  const sun = new THREE.DirectionalLight(0xffe6c7, OUTDOOR.sun);
   sun.position.copy(sunDir).multiplyScalar(160).add(new THREE.Vector3(23, 0, 40));
   sun.target.position.set(23, 0, 40);
   scene.add(sun.target);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  // 4096: about 4 cm per shadow texel over the whole plot, so balcony and cornice shadows stay crisp
+  sun.shadow.mapSize.set(4096, 4096);
   Object.assign(sun.shadow.camera, { left: -90, right: 90, top: 90, bottom: -90, near: 10, far: 400 });
   sun.shadow.bias = -0.0004;
   sun.shadow.normalBias = 0.04;
-  const hemi = new THREE.HemisphereLight(0xf3efe8, 0xd8c5ab, 0.6);
+  const hemi = new THREE.HemisphereLight(0xf3efe8, 0xd8c5ab, OUTDOOR.hemi);
+  scene.environmentIntensity = OUTDOOR.env;
   sun.shadow.radius = 4;
   // crisp shadows close up: the sun's shadow box shrinks to the apartment being viewed
   const SHADOW_WIDE = { left: -90, right: 90, top: 90, bottom: -90 };
@@ -99,12 +115,14 @@ async function init() {
   const site = buildSite(), complex = buildComplex();
   mark('siteComplex');
   scene.add(B.root, site, complex);
+  for (const r of [site, complex]) r.traverse((o) => { if (o.material && !Array.isArray(o.material)) sharpen(o.material); });
   clipMaterials(B.root);
   loadBar.style.width = '85%';
 
   // apartment overlays per floor (hidden until a floor is opened)
   const unitMeshes = [];
-  const BASE = 0.0, HOVER = 0.28, SELECTED = 0.42;
+  // the selected flat is marked by its outline: a tint over the whole floor greys its materials
+  const BASE = 0.0, HOVER = 0.16, SELECTED = 0.0;
   for (const f of B.floors) {
     const og = new THREE.Group();
     og.visible = false;
@@ -151,13 +169,154 @@ async function init() {
   const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
   composer.setPixelRatio(dpr);
   composer.setSize(innerWidth, innerHeight);
-  composer.addPass(new RenderPass(scene, camera));
+  // moving frames: one plain render. The settled frame (drawn once when the camera stops) is supersampled
+  // instead: 4 sub-pixel-jittered renders averaged, on top of MSAA, so thin railings, window bars, text and
+  // texture detail come out clean, at native-resolution memory cost
+  const renderPass = new RenderPass(scene, camera);
+  const ssaaPass = new SSAARenderPass(scene, camera);
+  ssaaPass.sampleLevel = 2;
+  ssaaPass.enabled = false;
+  const setStill = (on) => { renderPass.enabled = !on; ssaaPass.enabled = on; gtao.enabled = on; };
+  composer.addPass(renderPass);
+  composer.addPass(ssaaPass);
   const gtao = new GTAOPass(scene, camera, innerWidth, innerHeight);
   // AO is soft, low-frequency shading: compute it at half resolution (about a quarter of the cost)
   { const setSize = gtao.setSize.bind(gtao); gtao.setSize = (w, h) => setSize(Math.max(1, w / 2), Math.max(1, h / 2)); gtao.setSize(innerWidth * dpr, innerHeight * dpr); }
   gtao.updateGtaoMaterial({ radius: 0.8, distanceExponent: 1.4, thickness: 2, scale: 1 });
   composer.addPass(gtao);
   composer.addPass(new OutputPass());
+
+  // photo-real stills in the walk-through: moving frames stay rasterized; once the camera rests, a path tracer
+  // takes over and the still converges to a render (bounced light, soft shadows, reflections), fading in over
+  // the real-time frame. Any movement hands back to the rasterizer at once. The traced scene is built per
+  // show-flat on the first rest inside it (BVH in a worker).
+  // samples: when the still counts as converged; meter: samples after which its exposure is set (before the
+  // fade-in at minSamples)
+  // Opt-in (?trace) until the traced image is reliable: on the Intel test GPU the full show-flat scene still
+  // traces black even within the limits below.
+  const TRACE = { enabled: new URLSearchParams(location.search).has('trace'), samples: 256, meter: 6, exposure: 3 };
+  const pt = new WebGLPathTracer(renderer);
+  pt.setBVHWorker(new ParallelMeshBVHWorker());
+  Object.assign(pt, { bounces: 4, transmissiveBounces: 4, filterGlossyFactor: 0.5, minSamples: 8, renderDelay: 0, fadeDuration: 600, renderScale: 0.75 });
+  pt.rasterizeScene = false; // the canvas still holds the settled raster frame to fade from
+  pt.tiles.set(2, 2);
+  pt.textureSize.set(1024, 1024);
+  // edge-aware denoise that relaxes as samples accumulate
+  const denoise = new FullScreenQuad(new DenoiseMaterial({ map: null, transparent: true, premultipliedAlpha: renderer.getContextAttributes().premultipliedAlpha }));
+  pt.renderToCanvasCallback = (target, r, quad) => {
+    const m = denoise.material, n = Math.max(1, pt.samples);
+    m.map = target.texture;
+    m.opacity = quad.material.opacity;
+    m.blending = quad.material.blending;
+    m.sigma = 2.2; m.kSigma = 1.2; m.threshold = Math.max(0.02, 0.6 / Math.sqrt(n));
+    const ac = r.autoClear;
+    r.autoClear = false;
+    denoise.render(r);
+    r.autoClear = ac;
+  };
+  const trace = { key: null, built: false, want: false, on: false, metered: false, rasterMid: 0 };
+  // Traced stand-ins for the real-time materials. A MeshPhysicalMaterial in the traced scene blanked the whole
+  // image in testing (this tracer + three.js release, Intel GPU), so materials are traced as standard ones,
+  // stripped of maps by level to keep the texture array small: 1 = no roughness/metalness maps, 2 = no normal
+  // map either, 3 = colour only (everything outside the flat, which is only seen through the windows).
+  const MAX_TEXTURES = 60;
+  const MAPS = [[], ['roughnessMap', 'metalnessMap', 'aoMap'], ['normalMap'], ['map', 'emissiveMap', 'alphaMap']];
+  const standIns = new WeakMap();
+  const standIn = (m, level) => {
+    if (!m.isMeshPhysicalMaterial && level === 0) return m;
+    if (!standIns.has(m)) standIns.set(m, []);
+    const cache = standIns.get(m);
+    if (!cache[level]) {
+      const s = m.isMeshStandardMaterial ? new THREE.MeshStandardMaterial().copy(m) : m.clone();
+      for (const k of MAPS.slice(1, level + 1).flat()) if (k in s) s[k] = null;
+      cache[level] = s;
+    }
+    return cache[level];
+  };
+  const texturesOf = (mats) => {
+    const set = new Set();
+    for (const m of mats) for (const k of MAPS.flat()) if (m[k]) set.add(m[k].source ?? m[k]);
+    return set.size;
+  };
+  function buildTrace(key) {
+    trace.key = key;
+    trace.built = false;
+    // see-through panes (window glass, shower screens, lamp glass) would block the tracer's sky and lamp
+    // sampling, and their effect on a photo is a faint reflection at most; the walk markers are UI.
+    // Geometry is gathered synchronously, so all of this only lasts for this call.
+    const hide = [aids.group, aids.exits, aids.cursor, band].filter((o) => o.visible);
+    const near = [], far = [];
+    scene.traverseVisible((o) => {
+      if (!o.isMesh || Array.isArray(o.material)) return;
+      const m = o.material;
+      if (m === M.glass || (m.transparent && m.opacity < 0.5)) hide.push(o);
+      else {
+        let p = o;
+        while (p && p !== key.group) p = p.parent;
+        (p ? near : far).push(o);
+      }
+    });
+    let level = 0;
+    while (level < 3 && texturesOf(near.map((o) => standIn(o.material, level))) > MAX_TEXTURES) level++;
+    const swapped = [];
+    for (const [list, l] of [[near, level], [far, 3]]) {
+      for (const o of list) {
+        const s = standIn(o.material, l);
+        if (s !== o.material) { swapped.push([o, o.material]); o.material = s; }
+      }
+    }
+    for (const o of hide) o.visible = false;
+    const job = pt.setSceneAsync(scene, camera);
+    for (const o of hide) o.visible = true;
+    for (const [o, m] of swapped) o.material = m;
+    job.then(() => { if (trace.key === key) trace.built = true; }, (e) => console.warn('path tracer', e));
+  }
+  // median luminance of a sparse pixel sample (linear light)
+  const lin = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  function median(px, decode, stride) {
+    const v = [];
+    for (let i = 0; i < px.length; i += 4 * stride) {
+      const [r, g, b] = decode ? [lin(px[i] / 255), lin(px[i + 1] / 255), lin(px[i + 2] / 255)] : [px[i], px[i + 1], px[i + 2]];
+      v.push(0.2126 * r + 0.7152 * g + 0.0722 * b);
+    }
+    v.sort((a, b) => a - b);
+    return v[v.length >> 1] ?? 0;
+  }
+  function stopTrace() { trace.want = trace.on = false; }
+  // called on every settled walk frame, right after the raster frame is drawn: tracing starts as soon as the
+  // scene for this flat is ready
+  function wantTrace() {
+    if (!TRACE.enabled || mode !== 'walk' || !walkCtx?.sf) return;
+    if (trace.key !== walkCtx.sf) buildTrace(walkCtx.sf);
+    const gl = renderer.getContext(), w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+    const px = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    trace.rasterMid = median(px, true, 37);
+    trace.want = true;
+  }
+  function traceStep() {
+    if (trace.want && !trace.on && trace.built) {
+      pt.updateLights();
+      pt.updateCamera();
+      trace.on = true;
+      trace.metered = false;
+    }
+    if (!trace.on) return;
+    // real light transport has none of the rasterizer's fill light, so a traced interior comes out several
+    // times darker: like a photographer, expose each still to match the real-time frame's mid-tones
+    if (!trace.metered && pt.samples >= TRACE.meter) {
+      const t = pt.target, px = new Float32Array(t.width * t.height * 4);
+      renderer.readRenderTargetPixels(t, 0, 0, t.width, t.height, px);
+      const mid = median(px, false, 37);
+      if (mid > 0 && trace.rasterMid > 0) TRACE.exposure = THREE.MathUtils.clamp(trace.rasterMid / mid, 0.6, 12);
+      trace.metered = true;
+    }
+    const exposure = renderer.toneMappingExposure;
+    renderer.toneMappingExposure = TRACE.exposure;
+    pt.renderSample();
+    renderer.toneMappingExposure = exposure;
+    if (pt.samples >= TRACE.samples) trace.on = trace.want = false; // converged: the canvas keeps the still
+  }
 
   // controls
   const orbit = new OrbitControls(camera, canvas);
@@ -206,9 +365,19 @@ async function init() {
   // Interiors: an apartment-type library. Each type (plan number on one floor-plan sheet, so the fit is
   // exact) is furnished once, on first need, and cached; every apartment of that type on any floor is a
   // lightweight instance sharing the same geometry. Only what is being looked at is ever built.
-  let IM = null;
+  let IM = null, IMK = null;
   const types = new Map();
-  const loadInteriorMaterials = () => (IM ??= loadInteriorKit(M).then((K) => { invalidate(); return K; }));
+  const loadInteriorMaterials = () => (IM ??= loadInteriorKit(M).then((K) => {
+    // transmission makes three.js render the whole scene a second time (about a third of a floor-view frame);
+    // the thin panes (shower screens, railings) look the same as plain transparent glass with reflections.
+    // Only here: the 360° bake keeps the transmissive glass for Cycles.
+    Object.assign(K.glass, { transmission: 0, transparent: true, opacity: 0.16, depthWrite: false, roughness: 0.04 });
+    K.glass.color.set(0xdfe7e8);
+    K.glass.needsUpdate = true;
+    IMK = K;
+    invalidate();
+    return K;
+  }));
   function unitType(f, number) {
     const key = data.sheets.indexOf(f.sheet) + ':' + number;
     if (!types.has(key)) {
@@ -338,7 +507,7 @@ async function init() {
   }
   // dark "poche" on the cut wall tops, as on an architectural plan
   const CUT_H = 1.5;
-  const capMat = new THREE.MeshBasicMaterial({ color: 0x2e2b27 });
+  const capMat = new THREE.MeshBasicMaterial({ color: 0x5a534b });
   capMat.clippingPlanes = clipPlanes;
   function capsFor(f) {
     if (f.caps) return f.caps;
@@ -590,11 +759,11 @@ async function init() {
   // indoors: less flat fill light so materials keep their colour and depth
   // walk-through: filmic (ACES) tone mapping at exposure 1.0, softer fill, sun ~2.5 through the windows
   const interiorLight = (on) => {
-    hemi.intensity = on ? 0.4 : 0.6;
-    scene.environmentIntensity = on ? 0.6 : 1;
-    renderer.toneMapping = on ? THREE.ACESFilmicToneMapping : THREE.NeutralToneMapping;
-    renderer.toneMappingExposure = on ? 1.0 : 0.66;
-    sun.intensity = on ? 2.5 : 3.8;
+    hemi.intensity = on ? 0.4 : OUTDOOR.hemi;
+    scene.environmentIntensity = on ? 0.6 : OUTDOOR.env;
+    renderer.toneMapping = on ? THREE.ACESFilmicToneMapping : OUTDOOR.toneMapping;
+    renderer.toneMappingExposure = on ? 1.0 : OUTDOOR.exposure;
+    sun.intensity = on ? 2.5 : OUTDOOR.sun;
     invalidate();
   };
 
@@ -766,6 +935,7 @@ async function init() {
     glide(v.target, v.yaw, v.pitch, 1.6, () => living && announce(living));
   }
   function leaveWalk() {
+    stopTrace();
     walk.enabled = false;
     if (walkCtx?.sf) walkCtx.sf.group.visible = false;
     shopsRoot.visible = true;
@@ -985,22 +1155,26 @@ async function init() {
         if (gap > 24) { fastFrames = 0; if (++slowFrames >= 6) { scale = Math.max(0.6, scale * 0.88); slowFrames = 0; } }
         else if (gap < 18) { slowFrames = 0; if (++fastFrames >= 15) { scale = Math.min(1, scale * 1.1); fastFrames = 0; } }
       }
+      stopTrace();
       const pr = Math.max(0.6, Math.min(dpr, 1.5) * scale);
       setResolution(pr);
-      gtao.enabled = false;
+      setStill(false);
       composer.render();
       stillSince = now;
       needFull = true;
       setMoving(true);
     } else if (needFull && now - stillSince > 150) {
-      // settled: one full-quality frame, then nothing until something changes
+      // settled: one full-quality frame, then (inside a flat) the path-traced still, then nothing until
+      // something changes
+      stopTrace();
       scale = 1;
       setResolution(dpr);
       setMoving(false);
-      gtao.enabled = true;
+      setStill(true);
       composer.render();
       needFull = false;
-    }
+      wantTrace();
+    } else traceStep();
   }
   // while the camera moves, labels/signs/markers step aside for a clean view
   let movingNow = false;
@@ -1026,7 +1200,7 @@ async function init() {
   }
   addEventListener('resize', fitToWindow);
   document.addEventListener('visibilitychange', () => { fitToWindow(); invalidate(); });
-  window.__b = { scene, camera, B, openFloor, backToBuilding, showUnit, walkInto, orbit, focusUnit, cut, walk, aids, plan, invalidate, startTour, stopTour, enterUnit, focusRoom, render: () => composer.render(),
+  window.__b = { scene, camera, renderer, composer, gtao, ssaaPass, renderPass, B, pt, trace, TRACE, openFloor, backToBuilding, showUnit, walkInto, orbit, focusUnit, cut, walk, aids, plan, invalidate, startTour, stopTour, enterUnit, focusRoom, render: () => composer.render(),
     // profiling: scene size + GPU-synced render time with features toggled
     perf: () => {
       const gl = renderer.getContext();

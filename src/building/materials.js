@@ -33,12 +33,13 @@ export function buildingMaterials() {
 
     ceiling: std({ color: 0xe9e2d7, roughness: 0.95 }),
     floor: std({ color: 0xcdb99c, roughness: 0.8 }),
-    glass: std({ color: 0x33424f, metalness: 0.7, roughness: 0.05, transparent: true, opacity: 0.62, depthWrite: false, side: THREE.DoubleSide }),
+    // reflective blue-grey glazing: at a distance windows read by the sky they reflect, not as dark holes
+    glass: std({ color: 0x6f8797, metalness: 0.85, roughness: 0.04, envMapIntensity: 2.2, transparent: true, opacity: 0.72, depthWrite: false, side: THREE.DoubleSide }),
     frame: std({ color: 0x3a2d24, metalness: 0.4, roughness: 0.45 }),
     iron: std({ color: 0x1e1d1b, metalness: 0.6, roughness: 0.4 }),
     shopGlass: std({ color: 0xa9bcc4, metalness: 0.2, roughness: 0.05, transparent: true, opacity: 0.28 }),
     shopInterior: std({ color: 0x5e4630, emissive: 0xffc98a, emissiveIntensity: 1.1, roughness: 0.9 }),
-    terrace: std({ color: 0x8c4333, roughness: 0.75 }),
+    terrace: std({ color: 0xa47862, roughness: 0.8 }),
     roof: std({ color: 0x8d8a84, roughness: 0.95 }),
     solar: std({ color: 0x1b2946, metalness: 0.6, roughness: 0.22 }),
   };

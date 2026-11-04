@@ -215,7 +215,7 @@ export function tallUnit(M) {
 }
 
 // Soft goods: a cushion/pillow is a rounded box whose faces bulge outwards (plump, not boxy).
-export function pillowGeo(w, h, d, bulge = 0.35, seg = 8) {
+export function pillowGeo(w, h, d, bulge = 0.35, seg = 5) {
   const geo = new RoundedBoxGeometry(w, h, d, seg, Math.min(h, w, d) * 0.45);
   const p = geo.attributes.position;
   for (let i = 0; i < p.count; i++) {
@@ -229,7 +229,7 @@ export function pillowGeo(w, h, d, bulge = 0.35, seg = 8) {
 
 // Duvet draped over a mattress: flat, slightly domed top with soft wrinkles, falling down the sides and foot.
 function duvetGeo(w, l, drop, seed = 1) {
-  const sx = 56, sz = 44;
+  const sx = 36, sz = 28;
   const geo = new THREE.PlaneGeometry(w + 2 * drop, l + drop, sx, sz).rotateX(-Math.PI / 2);
   geo.translate(0, 0, drop / 2);
   const p = geo.attributes.position;
@@ -290,7 +290,7 @@ export function bed(M, w = 1.6, l = 2.1) {
   g.add(box(hw, 1.1, 0.08, M.headboard, 0, 0.6, -l / 2 - 0.07, { r: 0.03, seg: 4 }));
   const k = Math.round(hw / 0.2), cw = hw / k;
   for (let i = 0; i < k; i++) {
-    const c = mesh(pillowGeo(cw - 0.01, 1.0, 0.07, 0.15, 6), M.headboard, { offset: [i * 0.13, 0] });
+    const c = mesh(pillowGeo(cw - 0.01, 1.0, 0.07, 0.15, 4), M.headboard, { offset: [i * 0.13, 0] });
     c.position.set(-hw / 2 + cw * (i + 0.5), 0.62, -l / 2 - 0.02);
     g.add(c);
   }
