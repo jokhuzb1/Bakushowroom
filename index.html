@@ -12,17 +12,57 @@
       <div class="eyebrow">Virtual showroom</div>
       <h1>Baku City</h1>
       <div class="meta" id="meta"></div>
+      <div class="sc-buttons">
+        <button id="showcase-start" title="The whole showroom as a one-minute film · Весь шоурум за одну минуту">▶ Showcase · Презентация 1 min</button>
+        <button id="showcase-long" title="The full presentation: more views, more rooms, more Hi-tech · Полная презентация">▶ 2 min</button>
+      </div>
       <div class="floor-head">
         <div>
           <div id="floor-title">Choose a floor</div>
           <div class="sub" id="floor-sub">Hover the building or pick from the list</div>
         </div>
         <div class="head-actions">
-          <button id="street" title="The shop fronts at eye level, from the zebra crossing">Street view</button>
+          <button id="street" title="The building front at eye level, from the zebra crossing">Street view</button>
+          <button id="outside-360" title="Photoreal 360° views around the building">Outside 360°</button>
           <button id="back" title="Back to building">Building</button>
         </div>
       </div>
       <ul id="floors"></ul>
+    </aside>
+
+    <section id="showcase" hidden>
+      <img id="sc-still" alt="" hidden />
+      <div id="sc-black"></div>
+      <div id="sc-wait">Preparing the Showcase… · Подготовка презентации…</div>
+      <div class="sc-track"><div id="sc-bar"></div></div>
+      <div class="sc-top"><span id="sc-left"></span><button id="sc-skip">Skip · Пропустить ✕</button></div>
+      <div class="sc-caption"><div class="sc-en"><b id="sc-title"></b> · <span id="sc-sub"></span></div><div id="sc-ru"></div></div>
+    </section>
+
+    <aside class="card open" id="sky">
+      <button id="sky-toggle" title="Time of day and weather"><span>☀</span> Sky &amp; weather</button>
+      <div class="sky-body">
+        <div class="sky-row" id="sky-presets">
+          <button data-t="day" title="The showroom's own flattering light">Day</button>
+          <button data-t="sunrise">Sunrise</button>
+          <button data-t="noon">Noon</button>
+          <button data-t="sunset">Sunset</button>
+          <button data-t="night">Night</button>
+        </div>
+        <input id="sky-hour" type="range" min="4" max="23" step="0.1" value="15" aria-label="Time of day" />
+        <div class="sky-foot"><span id="sky-time"></span><span class="sky-btns"><button id="sky-see" title="Fly to a view of the sun and the building together">See the sun</button><button id="sky-path" class="on" title="The sun's path across the sky">Sun path</button></span></div>
+        <div class="sky-rows">
+          <div class="sky-row" id="sky-season" title="The sun's real path in midsummer and midwinter, at about 41° north">
+            <button data-s="summer">June</button>
+            <button data-s="winter">December</button>
+          </div>
+          <div class="sky-row" id="sky-weather">
+            <button data-w="clear">Clear</button>
+            <button data-w="rain">Rain</button>
+            <button data-w="snow">Snow</button>
+          </div>
+        </div>
+      </div>
     </aside>
 
     <section class="card" id="unit" hidden>
@@ -39,17 +79,16 @@
         <button id="u-tour" class="secondary">▶ Guided tour</button>
         <button id="u-walk" class="secondary">Walk inside</button>
         <button id="u-pano" class="secondary" hidden>360° tour</button>
-        <button id="u-street" class="secondary" hidden>Street view 360°</button>
       </div>
     </section>
 
-    <!-- 360° tour of the photoreal show-flat / shop renders (src/pano/viewer.js) -->
+    <!-- 360° tour of the photoreal show-flat renders (src/pano/viewer.js) -->
     <div id="pano" hidden>
       <canvas class="pano-canvas"></canvas>
       <div class="pano-spots"></div>
       <div class="pano-top">
         <div class="pano-title card"><b></b><span></span></div>
-        <div class="pano-actions"><button class="pano-3d">3D view</button><button class="pano-close" title="Close">×</button></div>
+        <div class="pano-actions"><div class="pano-designs" hidden></div><button class="pano-3d">3D view</button><button class="pano-close" title="Close">×</button></div>
       </div>
       <div class="pano-room"></div>
       <div class="pano-dock">

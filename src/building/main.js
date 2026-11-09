@@ -10,6 +10,8 @@ import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { WebGLPathTracer, DenoiseMaterial } from 'three-gpu-pathtracer';
 import { ParallelMeshBVHWorker } from 'three-mesh-bvh/worker';
 import { makeSky } from '../textures.js';
+import { Atmosphere } from './atmosphere.js';
+import { Showcase } from './showcase.js';
 import { buildingMaterials } from './materials.js';
 import { buildBuilding, CX, CY } from './model.js';
 import { buildSite, STREET_VIEWS } from './site.js';
@@ -17,7 +19,7 @@ import { buildComplex } from './complex.js';
 import { Walk } from '../walk.js';
 import { furnishUnit, furnishCommon } from './interior.js';
 import { buildShowflat } from './showflat.js';
-import { buildShop, shopKindLabel, insideShop } from './shops.js';
+import { buildBranch, loadBranchModels, BRANCH } from './branch.js';
 import { loadInteriorKit } from './kit.js';
 import { UnitPlan } from './unitplan.js';
 import { NavAids, nameOf } from './navaids.js';
@@ -56,11 +58,11 @@ const sharpen = (m) => { for (const k of TEX_KEYS) if (m[k] && m[k].anisotropy <
 const clipMaterials = (root) => root.traverse((o) => { if (o.material && !o.material.isLineBasicMaterial) { Object.assign(o.material, { clippingPlanes: clipPlanes, clipShadows: true }); sharpen(o.material); } });
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.1, 2000);
+// a page loaded in a hidden window has no size yet: 0 / 0 would poison the camera (and every plane clipped through it) with NaN
+const camera = new THREE.PerspectiveCamera(40, innerWidth && innerHeight ? innerWidth / innerHeight : 16 / 9, 0.1, 2000);
 
 const STATUS = {
   available: { label: 'Available', color: 0x3fb68b },
-  commercial: { label: 'Commercial', color: 0xd9a441 },
 };
 
 const T = {}; // load-stage timings (ms), read by __b.perf
@@ -74,7 +76,7 @@ async function init() {
   loadBar.style.width = '30%';
   await new Promise((r) => setTimeout(r, 0));
 
-  // light: late-afternoon sun from the north-west so the shop facade is lit, as in the render
+  // light: late-afternoon sun from the north-west so the street facade is lit, as in the render
   const sunDir = new THREE.Vector3(-0.6, 0.55, -0.6).normalize();
   // a deeper blue than the default: AgX greys out pale skies
   const sky = makeSky(sunDir, 1024, 512, { zenith: [0.12, 0.3, 0.85], horizon: [0.62, 0.76, 0.95] });
@@ -96,7 +98,9 @@ async function init() {
   sun.shadow.radius = 4;
   // crisp shadows close up: the sun's shadow box shrinks to the apartment being viewed
   const SHADOW_WIDE = { left: -90, right: 90, top: 90, bottom: -90 };
-  const shadowFocus = (c) => {
+  let shadowAt = null;
+  const shadowFocus = (c = shadowAt) => { // (no argument: the sun moved, same focus)
+    shadowAt = c;
     const box = c ? { left: -14, right: 14, top: 14, bottom: -14 } : SHADOW_WIDE;
     Object.assign(sun.shadow.camera, box);
     sun.shadow.camera.updateProjectionMatrix();
@@ -127,7 +131,7 @@ async function init() {
     const og = new THREE.Group();
     og.visible = false;
     for (const u of f.units) {
-      u.status = u.kind === 'shop' ? 'commercial' : 'available';
+      u.status = 'available';
       const mat = new THREE.MeshBasicMaterial({ color: STATUS[u.status].color, transparent: true, opacity: BASE, depthWrite: false });
       const line = new THREE.LineBasicMaterial({ color: STATUS[u.status].color });
       for (const r of u.rects) {
@@ -180,6 +184,8 @@ async function init() {
   composer.addPass(renderPass);
   composer.addPass(ssaaPass);
   const gtao = new GTAOPass(scene, camera, innerWidth, innerHeight);
+  // it hides points and lines from its normals pass, but not sprites: the sun and the lamp glows came out as black blocks
+  { const hide = gtao._overrideVisibility.bind(gtao); gtao._overrideVisibility = () => { hide(); scene.traverseVisible((o) => { if (o.isSprite) gtao._visibilityCache.push(o); }); for (const o of gtao._visibilityCache) o.visible = false; }; }
   // AO is soft, low-frequency shading: compute it at half resolution (about a quarter of the cost)
   { const setSize = gtao.setSize.bind(gtao); gtao.setSize = (w, h) => setSize(Math.max(1, w / 2), Math.max(1, h / 2)); gtao.setSize(innerWidth * dpr, innerHeight * dpr); }
   gtao.updateGtaoMaterial({ radius: 0.8, distanceExponent: 1.4, thickness: 2, scale: 1 });
@@ -326,20 +332,22 @@ async function init() {
   orbit.minDistance = 8;
   orbit.maxDistance = 220;
   const homeTarget = new THREE.Vector3(0, 24, 0);
-  const homePos = new THREE.Vector3(-40, 22, -88).multiplyScalar(Math.max(1, 1.2 / camera.aspect));
+  const homeFrame = () => new THREE.Vector3(-40, 22, -88).multiplyScalar(Math.max(1, 1.2 / camera.aspect));
+  const homePos = homeFrame();
   orbit.target.copy(homeTarget);
   camera.position.copy(homePos);
   const walk = new Walk(camera, canvas, [], []);
 
   // ---------- UI ----------
   const total = B.floors.reduce((a, f) => a + f.units.filter((u) => u.kind === 'apartment').length, 0);
-  const shopCount = B.floors[0].units.filter((u) => u.kind === 'shop').length;
-  $('#meta').textContent = `16 floors · ${total} apartments · ${shopCount} shops`;
+  // floors by number
+  const floorOf = (n) => B.floors.find((f) => f.floor === n);
+  $('#meta').textContent = `16 floors · ${total} apartments`;
   const list = $('#floors');
   for (const f of [...B.floors].reverse()) {
     const li = document.createElement('li');
     const n = f.units.filter((u) => u.kind === 'apartment').length;
-    li.innerHTML = `<b>${f.floor}</b><span>${f.floor === 1 ? `${shopCount} shops + ${n} flats` : `${n} apartments`}</span><i>${f.z.toFixed(2)} m</i>`;
+    li.innerHTML = `<b>${f.floor}</b><span>${f.floor === 1 ? `hall + ${n} flats` : `${n} apartments`}</span><i>${f.z.toFixed(2)} m</i>`;
     li.onclick = () => openFloor(f.floor);
     li.onmouseenter = () => { if (mode === 'building') hoverFloor(f.floor); };
     li.onmouseleave = () => { if (mode === 'building') hoverFloor(null); };
@@ -360,6 +368,7 @@ async function init() {
   const moving = (ms = 120) => { motionUntil = Math.max(motionUntil, performance.now() + ms); };
   const refreshShadows = () => { renderer.shadowMap.needsUpdate = true; invalidate(); };
   orbit.addEventListener('change', invalidate);
+  const atm = new Atmosphere({ scene, renderer, camera, orbit, sun, hemi, sunDir, baseSky: sky, base: OUTDOOR, M, buildingRoot: B.root, site, complex, shadowFocus, invalidate, refreshShadows });
   addEventListener('keydown', () => moving(300));
 
   // Interiors: an apartment-type library. Each type (plan number on one floor-plan sheet, so the fit is
@@ -384,59 +393,16 @@ async function init() {
       types.set(key, (async () => {
         const M = await loadInteriorMaterials();
         const t1 = performance.now();
-        const tpl = await furnishUnit(f, number, M);
+        if (number === 'branch') await loadBranchModels(M);
+        const tpl = number === 'branch' ? buildBranch(f, M, { shell: false }) : await furnishUnit(f, number, M);
         T['type' + key] = Math.round(performance.now() - t1);
         return tpl;
       })());
     }
     return types.get(key);
   }
-  // Ground-floor shops: fitted out once the interior kit is ready and always shown behind the shop windows
-  // (they are part of the street front); walking inside uses a lit copy, built on first walk-in.
-  let shopBuilds = null;
-  const shopsRoot = new THREE.Group();
-  shopsRoot.name = 'shops';
-  B.root.add(shopsRoot);
-  function shopsReady() {
-    shopBuilds ??= loadInteriorMaterials().then((K) => {
-      const out = new Map();
-      for (const u of B.floors[0].units.filter((x) => x.kind === 'shop')) {
-        const s = buildShop(u.shop, K);
-        clipMaterials(s.group);
-        shopsRoot.add(s.group);
-        out.set(u.id, s);
-      }
-      refreshShadows();
-      return out;
-    });
-    return shopBuilds;
-  }
-  const shopWalks = new Map();
-  function shopWalkFor(u) {
-    if (!shopWalks.has(u.id)) {
-      shopWalks.set(u.id, shopsReady().then((built) => {
-        const s = built.get(u.id);
-        const group = new THREE.Group();
-        for (const m of s.group.children) {
-          const c = new THREE.Mesh(m.geometry, m.material);
-          c.castShadow = m.castShadow;
-          c.receiveShadow = true;
-          group.add(c);
-        }
-        group.add(s.lights.clone());
-        group.visible = false;
-        scene.add(group);
-        return { ...s, group };
-      }));
-    }
-    return shopWalks.get(u.id);
-  }
   // the furnished instance of one apartment (built from its type on first use)
   async function ensureUnit(f, u) {
-    if (u.kind === 'shop') {
-      const s = (await shopsReady()).get(u.id);
-      return { group: s.group, colliders: s.colliders, rooms: s.rooms.map((r) => ({ ...r, unit: u })), walls: s.sheet.walls };
-    }
     f.interior ??= { group: Object.assign(new THREE.Group(), { visible: false }), units: new Map() };
     if (!f.interior.group.parent) { f.interior.group.position.y = f.z; B.root.add(f.interior.group); }
     if (f.interior.units.has(u.number)) return f.interior.units.get(u.number);
@@ -460,7 +426,7 @@ async function init() {
   }
   // a whole floor for the dollhouse view: every flat on it, each appearing as soon as it is ready
   async function ensureInterior(f) {
-    const flats = f.units.filter((u) => u.kind === 'apartment');
+    const flats = f.units; // (with floor 1's commercial branch)
     const fresh = flats.some((u) => !types.has(data.sheets.indexOf(f.sheet) + ':' + u.number));
     if (fresh && current === f) $('#floor-sub').textContent = 'Furnishing apartments…';
     // one after another (each finishes and appears quickly) rather than all interleaved
@@ -485,7 +451,7 @@ async function init() {
   // only the textures/materials are warmed up after start-up; furniture is built on demand
   // (no renderer.compileAsync() warm-up: it uploads uniforms without the clipping state these materials
   // use for the dollhouse cut, which breaks every later frame)
-  const warmUp = () => loadInteriorMaterials().then(() => { T.materialsReady = Math.round(performance.now()); return shopsReady(); });
+  const warmUp = () => loadInteriorMaterials().then(() => { T.materialsReady = Math.round(performance.now()); });
   // While nobody is interacting, pre-build the apartment types of the typical floors (4-5, 6-10, 11-16:
   // about 80% of all flats), one flat at a time, so most floors open instantly. Any input pauses it.
   let lastInput = performance.now();
@@ -497,7 +463,7 @@ async function init() {
   async function prebuildIdle() {
     await loadInteriorMaterials();
     for (const n of [8, 4, 12]) {
-      const f = B.floors[n - 1];
+      const f = floorOf(n);
       for (const u of f.units.filter((x) => x.kind === 'apartment')) {
         await whenIdle();
         await unitType(f, u.number);
@@ -512,7 +478,7 @@ async function init() {
   function capsFor(f) {
     if (f.caps) return f.caps;
     const geos = f.sheet.walls
-      .filter((r) => (r[2] - r[0]) * (r[3] - r[1]) > 0.004 && r[1] > f.box[1] - 0.3 && r[1] < f.box[3] + 0.3 && !(f.floor === 1 && insideShop(r)))
+      .filter((r) => (r[2] - r[0]) * (r[3] - r[1]) > 0.004 && r[1] > f.box[1] - 0.3 && r[1] < f.box[3] + 0.3)
       .map((r) => new THREE.PlaneGeometry(r[2] - r[0], r[3] - r[1]).rotateX(-Math.PI / 2).translate((r[0] + r[2]) / 2 - CX, 0, (r[1] + r[3]) / 2 - CY));
     f.caps = new THREE.Mesh(mergeGeometries(geos), capMat);
     f.caps.position.y = f.z + CUT_H - 0.003;
@@ -520,7 +486,7 @@ async function init() {
     B.root.add(f.caps);
     return f.caps;
   }
-  const floorSub = (f) => `${f.units.filter((u) => u.kind === 'apartment').length} apartments · level +${f.z.toFixed(2)} m`;
+  const floorSub = (f) => `${f.floor === 1 ? 'Commercial branch + ' : ''}${f.units.filter((u) => u.kind === 'apartment').length} apartments · level +${f.z.toFixed(2)} m`;
   // show one floor's interior; with `only`, just that apartment (walkthrough)
   const showInterior = (n, only = null) => {
     for (const f of B.floors) {
@@ -540,7 +506,7 @@ async function init() {
     hovered = n;
     invalidate();
     if (!n) { band.visible = false; $('#tip').hidden = true; return; }
-    const f = B.floors[n - 1];
+    const f = floorOf(n);
     const hb = f.hit.geometry.parameters;
     band.scale.set(hb.width + 0.6, f.h, hb.depth + 0.6);
     band.position.copy(f.hit.position);
@@ -557,7 +523,8 @@ async function init() {
 
   function openFloor(n) {
     leaveApartment();
-    const f = B.floors[n - 1];
+    if (seeingSun) wideLens(false);
+    const f = floorOf(n);
     mode = 'floor';
     current = f;
     document.body.dataset.mode = 'floor';
@@ -567,6 +534,7 @@ async function init() {
     B.floors.forEach((x) => { x.overlay.visible = x.floor === n; x.li.classList.toggle('on', x.floor === n); });
     $('#floor-title').textContent = `Floor ${n}`;
     $('#floor-sub').textContent = floorSub(f);
+    atm.apply();
     cut.constant = f.z + CUT_H;
     const ready = ensureInterior(f); // creates the floor's interior group right away; flats pop in as built
     showInterior(n);
@@ -575,8 +543,10 @@ async function init() {
     f.caps.position.y = f.z + CUT_H - 0.003;
     ready.then(() => { if (current === f && mode === 'floor') showInterior(n); });
     closeUnit();
-    const k = Math.max(1, 1.25 / camera.aspect);
-    animate(new THREE.Vector3(-4 * k, f.z + 34 * k, -30 * k), new THREE.Vector3(0, f.z, -1));
+    // floor 1 reaches 8.6 m further north than the tower: frame its centre
+    const k = Math.max(1, 1.25 / camera.aspect) * (n === 1 ? 1.2 : 1);
+    const cz = n === 1 ? (f.box[1] + f.box[3]) / 2 - CY : -1;
+    animate(new THREE.Vector3(-4 * k, f.z + 34 * k, cz - 29 * k), new THREE.Vector3(0, f.z, cz));
   }
 
   function backToBuilding() {
@@ -584,6 +554,7 @@ async function init() {
     mode = 'building';
     current = null;
     document.body.dataset.mode = 'building';
+    atm.apply();
     setVisibleUpTo(16);
     B.roof.visible = true;
     B.floors.forEach((x) => { x.overlay.visible = false; x.li.classList.remove('on'); });
@@ -599,13 +570,11 @@ async function init() {
   function showUnit(u) {
     invalidate();
     panel.hidden = false;
-    const shop = u.kind === 'shop';
-    $('#u-code').textContent = shop ? u.shop.brand : `Apartment ${u.code}`;
-    $('#u-type').textContent = shop ? `${shopKindLabel(u.shop)} · ${u.shop.tagline}` : `${u.rooms ?? '–'}-room · plan №${u.number}`;
-    $('#u-view').textContent = shop ? 'View shop' : 'View apartment';
-    $('#u-tour').hidden = shop;
+    const branch = u.kind === 'commercial';
+    $('#u-code').textContent = branch ? `${BRANCH.name} ${BRANCH.line}` : `Apartment ${u.code}`;
+    $('#u-type').textContent = branch ? `Commercial branch · ${BRANCH.tagline}` : `${u.rooms ?? '–'}-room · plan №${u.number}`;
+    $('#u-view').textContent = branch ? 'View branch' : 'View apartment';
     $('#u-pano').hidden = !hasPano(u);
-    $('#u-street').hidden = !shop;
     $('#u-area').textContent = u.area ? `${u.area.toFixed(2)} m²` : '–';
     $('#u-floor').textContent = `${u.floor}`;
     $('#u-status').textContent = STATUS[u.status].label;
@@ -758,14 +727,7 @@ async function init() {
   const EYE = 1.6, WALK_FOV = 80;
   // indoors: less flat fill light so materials keep their colour and depth
   // walk-through: filmic (ACES) tone mapping at exposure 1.0, softer fill, sun ~2.5 through the windows
-  const interiorLight = (on) => {
-    hemi.intensity = on ? 0.4 : OUTDOOR.hemi;
-    scene.environmentIntensity = on ? 0.6 : OUTDOOR.env;
-    renderer.toneMapping = on ? THREE.ACESFilmicToneMapping : OUTDOOR.toneMapping;
-    renderer.toneMappingExposure = on ? 1.0 : OUTDOOR.exposure;
-    sun.intensity = on ? 2.5 : OUTDOOR.sun;
-    invalidate();
-  };
+  const interiorLight = (on) => { atm.interior = on; atm.apply(); };
 
   // ---------- apartment dollhouse (the main way to see a flat) ----------
   // Just this apartment, ceiling off, on a dark studio backdrop, seen from above like an architect's
@@ -778,8 +740,9 @@ async function init() {
   scene.add(studioFloor);
   function surroundings(on) {
     site.visible = complex.visible = on;
-    scene.background = on ? sky : STUDIO;
     studioFloor.visible = !on;
+    atm.setStudio(!on);
+    if (!on) scene.background = STUDIO;
     invalidate();
   }
   function isolate(f, box) {
@@ -806,7 +769,7 @@ async function init() {
   async function enterUnit(u, room = null) {
     stopTour();
     if (mode === 'walk') leaveWalk();
-    const f = B.floors[u.floor - 1];
+    const f = floorOf(u.floor);
     current = f;
     const ui = await ensureUnit(f, u);
     mode = 'unit';
@@ -882,7 +845,8 @@ async function init() {
     const key = data.sheets.indexOf(f.sheet) + ':' + u.number;
     if (!showflats.has(key)) {
       showflats.set(key, loadInteriorMaterials().then(async (K) => {
-        const sf = await buildShowflat({ ...f, sheetIndex: data.sheets.indexOf(f.sheet) }, u, K, M.wall);
+        if (u.kind === 'commercial') await loadBranchModels(K);
+        const sf = u.kind === 'commercial' ? buildBranch(f, K) : await buildShowflat({ ...f, sheetIndex: data.sheets.indexOf(f.sheet) }, u, K, M.wall);
         clipMaterials(sf.group);
         sf.group.visible = false;
         scene.add(sf.group);
@@ -894,8 +858,7 @@ async function init() {
   async function walkInto(u) {
     if (mode !== 'unit' || walkCtx?.u !== u) await enterUnit(u);
     $('#hint-text').textContent = 'Preparing walk-through…';
-    const sf = u.kind === 'shop' ? await shopWalkFor(u) : await showflatFor(walkCtx.f, u);
-    shopsRoot.visible = false; // the walk copy (with its lights) stands in for the street-front shops
+    const sf = await showflatFor(walkCtx.f, u);
     const realF = walkCtx.f;
     // walk the show-flat: the real building floors step aside, the enlarged flat takes their place
     sf.group.position.y = realF.z;
@@ -938,7 +901,6 @@ async function init() {
     stopTrace();
     walk.enabled = false;
     if (walkCtx?.sf) walkCtx.sf.group.visible = false;
-    shopsRoot.visible = true;
     aids.close();
     walk.frame(0);
     camera.fov = 40;
@@ -1006,28 +968,47 @@ async function init() {
   $('#walk-in').onclick = () => walkCtx && walkInto(walkCtx.u);
   $('#tour-stop').onclick = stopTour;
 
-  // ---------- 360° tour (photoreal renders of floors 1-2 and the shops) ----------
+  // ---------- 360° tour (photoreal renders of floors 1-2) ----------
   const allUnits = B.floors.flatMap((f) => f.units);
   const pano = new PanoViewer($('#pano'), {
-    // "3D view" from the tour: walk the same flat or shop in real time (or stand at the crossing)
-    on3D: (id) => { if (id === 'street') return streetView(); const u = allUnits.find((x) => panoId(x) === id); if (u) walkInto(u); },
+    // "3D view" from the tour: walk the same flat in real time
+    on3D: (id) => { const u = allUnits.find((x) => panoId(x) === id); if (u) walkInto(u); else if (id === 'exterior') streetView(); },
   });
-  const openPano = (u, stop = null) => { if (u && hasPano(u)) { stopTour(); pano.open(panoId(u), stop); } };
+  const openPano = (u, stop = null, design = null) => { if (u && hasPano(u)) { stopTour(); pano.open(panoId(u), stop, design); } };
   $('#u-pano').onclick = () => openPano(selectedUnit);
   $('#walk-pano').onclick = () => openPano(walkCtx?.u);
-  $('#u-street').onclick = () => { stopTour(); pano.open('street'); };
-  // shareable link: #pano=<tour id>/<room>
-  const deep = location.hash.match(/^#pano=([\w-]+)(?:\/([\w-]+))?/);
-  if (deep?.[1] === 'street') pano.open('street', deep[2]);
-  else if (deep) openPano(allUnits.find((x) => panoId(x) === deep[1]), deep[2]);
+  // shareable link: #pano=<tour id>/<room>/<design>
+  const deep = location.hash.match(/^#pano=([\w-]+)(?:\/([\w-]+))?(?:\/([\w-]+))?/);
+  if (deep) openPano(allUnits.find((x) => panoId(x) === deep[1]), deep[2], deep[3]);
 
-  // ---------- street view: the shop fronts at eye level from the zebra crossing ----------
+  // ---------- street view: the building front at eye level from the zebra crossing ----------
   function streetView() {
     backToBuilding();
     const v = STREET_VIEWS[0];
     animate(new THREE.Vector3(v.pos[0], 1.7, v.pos[2]), new THREE.Vector3(v.look[0], 1.2, v.look[2]), null, 2.2);
   }
   $('#street').onclick = streetView;
+  $('#outside-360').onclick = () => { stopTour(); pano.open('exterior'); };
+  atm.bindUI($);
+  const showcase = new Showcase({ $, atm, camera, orbit, pano, animate, cancelMove: () => { tween = null; }, openFloor, backToBuilding, enterUnit, focusRoom, roomsNow: () => walkCtx?.rooms ?? [], ensureInterior, floorOf, panoId, site, complex, refreshShadows });
+  $('#showcase-start').onclick = () => showcase.start(60);
+  $('#showcase-long').onclick = () => showcase.start(120);
+  if (location.hash === '#showcase') showcase.start(60);
+  if (location.hash === '#showcase-2') showcase.start(120);
+  // a high wide view towards the sun, over the rooftops, with the tower in the frame; again: back to the home view
+  let seeingSun = false;
+  const wideLens = (on, fov = 66) => { camera.fov = on ? fov : 40; camera.updateProjectionMatrix(); orbit.maxPolarAngle = on ? Math.PI - 0.05 : THREE.MathUtils.degToRad(89.5); $('#sky-see').textContent = on ? 'Back' : 'See the sun'; seeingSun = on; };
+  atm.onSeeSun = () => {
+    if (seeingSun) { wideLens(false); backToBuilding(); return; }
+    backToBuilding();
+    const d = atm.skyBody, ground = new THREE.Vector3(d.x, 0, d.z).normalize(), side = new THREE.Vector3(-ground.z, 0, ground.x);
+    const pos = ground.clone().multiplyScalar(-135).addScaledVector(side, 48).setY(68);
+    const toTower = new THREE.Vector3(0, 40, 0).sub(pos).normalize();
+    const apart = THREE.MathUtils.radToDeg(toTower.angleTo(d));
+    const look = toTower.multiplyScalar(0.8).add(d).normalize(); // between the two, a little towards the sun
+    wideLens(true, Math.min(92, Math.max(58, apart + 14))); // a high sun needs a wider lens
+    animate(pos, pos.clone().addScaledVector(look, 60));
+  };
   // Back: walk -> apartment -> floor -> building
   const goBack = () => {
     if (mode === 'walk') enterUnit(walkCtx.u);
@@ -1056,7 +1037,7 @@ async function init() {
       const n = h?.object.userData.floor ?? null;
       if (n !== hovered) hoverFloor(n);
       if (n) {
-        const f = B.floors[n - 1];
+        const f = floorOf(n);
         tip.hidden = false;
         tip.innerHTML = `<b>Floor ${n}</b> · ${f.units.filter((u) => u.kind === 'apartment').length} apartments`;
         tip.style.transform = `translate(${e.clientX + 14}px, ${e.clientY + 14}px)`;
@@ -1073,7 +1054,7 @@ async function init() {
       }
       tip.hidden = !u;
       if (u) {
-        tip.innerHTML = u.kind === 'shop' ? `<b>${u.shop.brand}</b> · ${shopKindLabel(u.shop)} · ${u.area.toFixed(1)} m²` : `<b>${u.code}</b> · ${u.rooms}-room · ${u.area?.toFixed(1)} m²`;
+        tip.innerHTML = u.kind === 'commercial' ? `<b>${BRANCH.name} ${BRANCH.line}</b> · commercial branch · ${u.area.toFixed(1)} m²` : `<b>${u.code}</b> · ${u.rooms}-room · ${u.area?.toFixed(1)} m²`;
         tip.style.transform = `translate(${e.clientX + 14}px, ${e.clientY + 14}px)`;
       }
       canvas.style.cursor = u ? 'pointer' : '';
@@ -1101,7 +1082,6 @@ async function init() {
   prebuildIdle();
   document.body.dataset.mode = 'building';
 
-  const SHOPFRONT = new THREE.Vector3(17.5 - CX, 2, -4.4 - CY);
   // the scene renders into the composer's targets, so the resolution changes there, not just on the canvas
   // (render targets are reallocated, so small steps are ignored)
   function setResolution(pr) {
@@ -1136,14 +1116,9 @@ async function init() {
     if ((mode === 'walk' || mode === 'unit') && walkCtx) plan.draw(camera, walk);
     if (mode === 'walk' && walkCtx) aids.update(t / 1000, plan.roomAt(walk.pos.x + CX, walk.pos.y + CY));
     camera.updateMatrixWorld();
-    // the furnished shops behind the street windows (~150 draw calls) only show up close
-    if (mode !== 'walk') {
-      const near = mode !== 'building' || camera.position.distanceTo(SHOPFRONT) < 70;
-      // (no shadow refresh: the shops sit indoors under the podium, re-rendering the shadow map mid-orbit hitches)
-      if (shopsRoot.visible !== near) { shopsRoot.visible = near; invalidate(); }
-    }
     const camMoved = !lastCam.equals(camera.matrixWorld);
     if (camMoved) lastCam.copy(camera.matrixWorld);
+    atm.tick(now);
     if (camMoved || tween || now < motionUntil) {
       // moving: no ambient occlusion (about three quarters of the frame cost at full HD), MSAA kept,
       // resolution adapted to keep the frame rate up; AO comes back on the settled frame
@@ -1163,6 +1138,14 @@ async function init() {
       stillSince = now;
       needFull = true;
       setMoving(true);
+    } else if (atm.animating) {
+      // rain or snow falling: light frames, with no path-traced still, while nothing else moves
+      stopTrace();
+      setResolution(Math.max(0.6, Math.min(dpr, 1.5) * scale));
+      setMoving(false);
+      setStill(false);
+      composer.render();
+      needFull = true;
     } else if (needFull && now - stillSince > 150) {
       // settled: one full-quality frame, then (inside a flat) the path-traced still, then nothing until
       // something changes
@@ -1187,12 +1170,15 @@ async function init() {
   requestAnimationFrame(frame);
 
   // follow the window size; checked every frame because resize events can be missed while hidden
-  let vw = innerWidth, vh = innerHeight;
+  const drawn = renderer.getSize(new THREE.Vector2());
+  let vw = drawn.x, vh = drawn.y; // what was actually drawn at: 0 if the window was hidden at load
   function fitToWindow() {
     if (!innerWidth || !innerHeight || (innerWidth === vw && innerHeight === vh)) return; // 0 = hidden window
+    const firstSize = !vw || !vh;
     vw = innerWidth; vh = innerHeight;
     camera.aspect = vw / vh;
     camera.updateProjectionMatrix();
+    if (firstSize) camera.position.copy(homePos.copy(homeFrame())); // the home view depends on the real aspect
     renderer.setSize(vw, vh);
     composer.setSize(vw, vh);
     gtao.setSize(vw * dpr, vh * dpr);
@@ -1200,7 +1186,7 @@ async function init() {
   }
   addEventListener('resize', fitToWindow);
   document.addEventListener('visibilitychange', () => { fitToWindow(); invalidate(); });
-  window.__b = { scene, camera, renderer, composer, gtao, ssaaPass, renderPass, B, pt, trace, TRACE, openFloor, backToBuilding, showUnit, walkInto, orbit, focusUnit, cut, walk, aids, plan, invalidate, startTour, stopTour, enterUnit, focusRoom, render: () => composer.render(),
+  window.__b = { atm, showcase, scene, camera, renderer, composer, gtao, ssaaPass, renderPass, B, pt, trace, TRACE, openFloor, backToBuilding, showUnit, walkInto, orbit, focusUnit, cut, walk, aids, plan, invalidate, startTour, stopTour, enterUnit, focusRoom, render: () => composer.render(),
     // profiling: scene size + GPU-synced render time with features toggled
     perf: () => {
       const gl = renderer.getContext();

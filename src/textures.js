@@ -301,7 +301,7 @@ export async function generateTextures(onProgress) {
 
 // Equirectangular HDR sky (no sun disk - the sun is a separate DirectionalLight so both
 // the rasterizer and the path tracer see the same single sun).
-export function makeSky(sunDir, width = 1024, height = 512, { zenith = [0.34, 0.5, 0.82], horizon = [1.0, 0.99, 0.98] } = {}) {
+export function makeSky(sunDir, width = 1024, height = 512, { zenith = [0.34, 0.5, 0.82], horizon = [1.0, 0.99, 0.98], glow: glowTint = [1, 0.85, 0.6], cloud: cloudTint = [1.25, 1.25, 1.25], ground = 1 } = {}) {
   const data = new Float32Array(width * height * 4);
   const s = sunDir.clone().normalize();
   // matches three.js equirect lookup: u = atan2(z, x) / 2PI + 0.5, v = asin(y) / PI + 0.5, row 0 = bottom
@@ -317,15 +317,15 @@ export function makeSky(sunDir, width = 1024, height = 512, { zenith = [0.34, 0.
         const t = Math.pow(1 - dy, 3);
         r = mix(zenith[0], horizon[0], t); g = mix(zenith[1], horizon[1], t); b = mix(zenith[2], horizon[2], t);
         const glow = Math.pow(cosSun, 8) * 1.2 + Math.pow(cosSun, 64) * 4;
-        r += glow * 1.0; g += glow * 0.85; b += glow * 0.6;
+        r += glow * glowTint[0]; g += glow * glowTint[1]; b += glow * glowTint[2];
         const cl = fbm(x / width, y / height, 8, 4, 5, 7);
         const cloud = smooth(0.55, 0.75, cl) * smooth(0.0, 0.25, dy) * 0.6;
-        r = mix(r, 1.25, cloud); g = mix(g, 1.25, cloud); b = mix(b, 1.25, cloud);
+        r = mix(r, cloudTint[0], cloud); g = mix(g, cloudTint[1], cloud); b = mix(b, cloudTint[2], cloud);
       } else {
         // ground: hazy city / park tones fading to horizon
         const t = Math.pow(1 + dy, 6);
         const n = fbm(x / width, y / height, 64, 16, 3, 3);
-        r = mix(0.27 + 0.05 * n, 0.9, t); g = mix(0.255 + 0.05 * n, 0.9, t); b = mix(0.235 + 0.04 * n, 0.9, t);
+        r = mix(0.27 + 0.05 * n, 0.9, t) * ground; g = mix(0.255 + 0.05 * n, 0.9, t) * ground; b = mix(0.235 + 0.04 * n, 0.9, t) * ground;
       }
       const i = (y * width + x) * 4;
       const k = 2.6;

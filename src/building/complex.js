@@ -131,17 +131,17 @@ export function buildComplex() {
   root.name = 'complex';
   const std = (p) => new THREE.MeshStandardMaterial(p);
   const M = {
-    body: [0, 1, 2].map((v) => std({ map: facadeTexture(v), roughness: 0.85 })),
+    body: [0, 1, 2].map((v) => std({ name: 'facade', map: facadeTexture(v), roughness: 0.85 })),
     shop: std({ map: shopTexture(), roughness: 0.6, emissive: 0xffc98a, emissiveIntensity: 0.25, emissiveMap: null }),
     trim: std({ color: 0xe8d7b6, roughness: 0.8 }),
     roof: std({ color: 0xb9a596, roughness: 0.95 }),
     terrace: std({ color: 0x8c4333, roughness: 0.75 }),
     solar: std({ color: 0x1b2946, metalness: 0.6, roughness: 0.22 }),
     dome: std({ color: 0x9a3b2c, metalness: 0.3, roughness: 0.45 }),
-    glass: std({ color: 0x33424f, metalness: 0.75, roughness: 0.06 }),
+    glass: std({ name: 'windowGlass', color: 0x33424f, metalness: 0.75, roughness: 0.06 }),
   };
   M.shop.emissiveMap = M.shop.map;
-  const parts = new Map();
+  let parts = new Map();
   const add = (mat, geo) => { if (!parts.has(mat)) parts.set(mat, []); parts.get(mat).push(geo); };
   const box = (mat, x0, y0, z0, x1, y1, z1) => {
     const g = new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0);
@@ -150,6 +150,7 @@ export function buildComplex() {
   };
 
   for (const b of BLOCKS) {
+    parts = new Map();
     for (const [x0, z0, x1, z1] of b.rects) {
       // shop podium, tower body in three bands so the arched top floors line up with the cornices
       add(M.shop, mappedBox(x0, 0, z0, x1, PODIUM, z1, 3.2, PODIUM));
@@ -211,6 +212,19 @@ export function buildComplex() {
       add(M.trim, cap);
       addDome(x, z, ROOF_Z + 0.3, 3.2);
     }
+    // one group per block, so the Showcase can move each out of the way
+    const group = new THREE.Group();
+    for (const [mat, list] of parts) {
+      // drop uv-less pieces into a consistent attribute set before merging
+      const m = new THREE.Mesh(mergeGeometries(list.map((g) => (g.index ? g.toNonIndexed() : g))), mat);
+      m.castShadow = true;
+      m.receiveShadow = true;
+      group.add(m);
+    }
+    const boxes = b.rects.map((r) => [...r]);
+    if (b.tower) boxes.push([b.tower.x - b.tower.r, b.tower.z - b.tower.r, b.tower.x + b.tower.r, b.tower.z + b.tower.r]);
+    group.userData.block = { boxes, h: ROOF_Z + 7 };
+    root.add(group);
   }
 
   function addDome(x, z, y, r) {
@@ -225,12 +239,5 @@ export function buildComplex() {
     add(M.trim, fin);
   }
 
-  for (const [mat, list] of parts) {
-    // drop uv-less pieces into a consistent attribute set before merging
-    const m = new THREE.Mesh(mergeGeometries(list.map((g) => (g.index ? g.toNonIndexed() : g))), mat);
-    m.castShadow = true;
-    m.receiveShadow = true;
-    root.add(m);
-  }
   return root;
 }

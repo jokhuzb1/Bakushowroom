@@ -22,11 +22,14 @@ function toFloat(geo) {
   return geo;
 }
 
-export async function loadModels(onProgress) {
+// the hi-tech design's furniture (written in sand3d, see tools/sand3d/): only the 360° bake loads these
+export const HITECH_IDS = ['ht_coffee_table', 'ht_dining_table', 'ht_chair', 'ht_floor_lamp', 'ht_pendant'];
+
+export async function loadModels(onProgress, ids = MODEL_IDS) {
   const loader = new GLTFLoader();
   const lib = {};
   let n = 0;
-  await Promise.all(MODEL_IDS.map(async (id) => {
+  await Promise.all(ids.map(async (id) => {
     try {
       const scene = (await loader.loadAsync(`/models/${id}.glb`)).scene;
       scene.updateMatrixWorld(true);
@@ -49,7 +52,7 @@ export async function loadModels(onProgress) {
     } catch (e) {
       console.warn('model failed', id, e);
     }
-    onProgress?.(++n / MODEL_IDS.length);
+    onProgress?.(++n / ids.length);
   }));
   return lib;
 }

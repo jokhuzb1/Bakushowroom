@@ -1,4 +1,4 @@
-// 360° tour stops for one show-flat or shop: one panorama per real room, as a buyer thinks of it.
+// 360° tour stops for one show-flat: one panorama per real room, as a buyer thinks of it.
 // - a bathroom split into WC + shower on the drawings is one stop (the largest part),
 // - small halls and corridors fold into the room they open onto (living room first),
 // - balconies too narrow to stand on are left out.
@@ -38,12 +38,12 @@ function cameraSpot(room, solids) {
   return out;
 }
 
-// rooms: show-flat / shop rooms (plan coords); solids: colliders (world); walls: plan wall rects
+// rooms: show-flat rooms (plan coords); solids: colliders (world); walls: plan wall rects
 export function tourStops(rooms, solids, walls) {
   const doors = NavAids.prototype.findDoorways.call(null, rooms, walls);
-  // open-plan zones (a shop's front and counter) touch without a doorway: link them at the shared edge
+  // open-plan zones touch without a doorway: link them at the shared edge
   for (const a of rooms) for (const b of rooms) {
-    if (a === b || (doors.get(a) ?? []).some((l) => l.to === b)) continue;
+    if (a === b || a.doors || (doors.get(a) ?? []).some((l) => l.to === b)) continue;
     for (const p of a.rects) for (const q of b.rects) {
       const ox = Math.min(p[2], q[2]) - Math.max(p[0], q[0]), oy = Math.min(p[3], q[3]) - Math.max(p[1], q[1]);
       if (!((ox > 1 && Math.abs(oy) < 0.02) || (oy > 1 && Math.abs(ox) < 0.02))) continue;
@@ -69,18 +69,18 @@ export function tourStops(rooms, solids, walls) {
   const resolve = (r) => { let x = r; for (let i = 0; i < 4 && alias.has(x); i++) x = alias.get(x); return x; };
 
   const shown = rooms.filter((r) => !alias.has(r));
-  const order = { living: 0, shopFront: 0, hall: 1, bedroom: 2, shopBack: 2, bath: 3, balcony: 4 };
+  const order = { lobby: -1, living: 0, hall: 1, bedroom: 2, bath: 3, balcony: 4 };
   shown.sort((a, b) => (order[a.type] ?? 5) - (order[b.type] ?? 5) || (a.kids ? 1 : 0) - (b.kids ? 1 : 0) || b.area - a.area);
   const ids = new Map();
   const count = {};
   for (const r of shown) {
-    const base = r.kids ? 'kids' : r.type === 'shopFront' ? 'front' : r.type === 'shopBack' ? 'back' : r.type;
+    const base = r.kids ? 'kids' : r.type;
     count[base] = (count[base] ?? 0) + 1;
     ids.set(r, count[base] > 1 ? `${base}${count[base]}` : base);
   }
   const named = {};
   const stops = shown.map((r) => {
-    const [x, y] = cameraSpot(r, solids);
+    const [x, y] = r.cam ?? cameraSpot(r, solids);
     let name = nameOf(r);
     named[name] = (named[name] ?? 0) + 1;
     if (named[name] > 1) name = r.type === 'bath' && named[name] === 2 ? 'Guest bathroom' : `${name} ${named[name]}`;

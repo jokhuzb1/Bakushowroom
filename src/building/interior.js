@@ -13,6 +13,16 @@ const inside = (r, x, y) => x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3];
 const overlap = (a, b) => a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1];
 
 // ---------- room classification ----------
+// the wall of a room its windows are in, from the plan's openings (null: none near it). The margin is wide:
+// the rectangles of a room can stop well short of its facade.
+function windowSide(room, openings) {
+  const [x0, y0, x1, y1] = room.bbox, m = 2;
+  const win = openings.filter((o) => o.kind !== 'door' && overlap(o.rect, [x0 - m, y0 - m, x1 + m, y1 + m]));
+  if (!win.length) return null;
+  const [a, b, c, d] = win.sort((p, q) => (q.rect[2] - q.rect[0]) * (q.rect[3] - q.rect[1]) - (p.rect[2] - p.rect[0]) * (p.rect[3] - p.rect[1]))[0].rect;
+  if (c - a >= d - b) return (b + d) / 2 < (y0 + y1) / 2 ? 'north' : 'south';
+  return (a + c) / 2 < (x0 + x1) / 2 ? 'west' : 'east';
+}
 export function classifyRooms(floor) {
   const { sheet, units, box } = floor;
   const rooms = [];
@@ -31,8 +41,9 @@ export function classifyRooms(floor) {
     if (!type) type = r.fixtures > 0.04 ? 'bath' : side ? 'facade' : 'hall';
     rooms.push({ ...r, unit, type, side, rect: big });
   }
-  // balconies: the slab outlines drawn outside the facade, given to the flat behind them
-  for (const b of sheet.balconies ?? []) {
+  // balconies: the slab outlines drawn outside the facade, given to the flat behind them (on floor 1
+  // floor, under the street, those outlines are the entrance steps)
+  for (const b of floor.floor === 1 ? [] : sheet.balconies ?? []) {
     const north = b[3] <= box[1] + 0.15, south = b[1] >= box[3] - 0.15;
     if (!north && !south) continue;
     const cx = (b[0] + b[2]) / 2, cy = north ? box[1] + 0.4 : box[3] - 0.4;
@@ -40,6 +51,24 @@ export function classifyRooms(floor) {
     if (!unit || (b[2] - b[0]) < 0.8 || (b[3] - b[1]) < 0.4) continue; // French balconies are just railings
     const r = [b[0], b[1], b[2], b[3]];
     rooms.push({ area: +((b[2] - b[0]) * (b[3] - b[1])).toFixed(2), label: [cx, (b[1] + b[3]) / 2], bbox: r, inner: r, rects: [r], fixtures: 0, unit, type: 'balcony', side: north ? 'north' : 'south', rect: r });
+  }
+  // A room whose plan label sits in a facade sliver reads as two: the sliver and a big "hall" behind it with no
+  // wall between them. They are one room, and a big enough hall with a window of its own is a room too.
+  for (const h of rooms.filter((r) => r.type === 'hall' && r.area >= 10)) {
+    const near = (a, b) => a[0] < b[2] + 0.3 && a[2] > b[0] - 0.3 && a[1] < b[3] + 0.3 && a[3] > b[1] - 0.3;
+    const i = rooms.findIndex((r) => r.unit === h.unit && r.type === 'facade' && r.area < 6 && near(r.rect, h.rect));
+    if (i >= 0) {
+      const [sliver] = rooms.splice(i, 1);
+      Object.assign(h, {
+        type: 'facade', side: sliver.side, area: +(h.area + sliver.area).toFixed(2), rects: [...h.rects, ...sliver.rects],
+        bbox: [Math.min(h.bbox[0], sliver.bbox[0]), Math.min(h.bbox[1], sliver.bbox[1]), Math.max(h.bbox[2], sliver.bbox[2]), Math.max(h.bbox[3], sliver.bbox[3])],
+        rect: [Math.max(h.rect[0], sliver.rect[0]), Math.min(h.rect[1], sliver.rect[1]), Math.min(h.rect[2], sliver.rect[2]), Math.max(h.rect[3], sliver.rect[3])],
+      });
+      h.inner = h.rect;
+    } else if (h.area >= 12) {
+      const side = windowSide(h, sheet.openings);
+      if (side) Object.assign(h, { type: 'facade', side });
+    }
   }
   for (const u of units) {
     const fac = rooms.filter((r) => r.unit === u && r.type === 'facade').sort((a, b) => b.area - a.area);
@@ -133,6 +162,8 @@ function frame(rect, side, swings, z, walls = [], roomRects = null, clears = [])
 // ---------- room layouts ----------
 // a real model from the library when available, else the procedural piece
 const real = (M, id, fit, fallback) => model(M.lib, id, fit) ?? fallback?.() ?? null;
+// a design package's own version of a piece (same footprint), else the standard one
+const pick = (M, key, standard) => M.swap?.[key]?.() ?? standard();
 const PLANTS = ['potted_plant_01', 'potted_plant_02'];
 const VASES = ['ceramic_vase_01', 'ceramic_vase_02', 'ceramic_vase_04'];
 
@@ -150,10 +181,15 @@ function tvWall(M, w) {
   const ch = cab.userData.size.y;
   g.add(gbox(Math.min(1.4, w * 0.85), 0.8, 0.035, M.screen, 0, ch + 0.62, -0.17));
   g.add(gbox(Math.min(1.4, w * 0.85) + 0.012, 0.812, 0.02, M.blackMetal, 0, ch + 0.62, -0.19));
+  // lit vertical lines in the panel, a line under the console (only design packages with an LED line)
+  if (M.ledLine) {
+    for (const s of [-1, 1]) g.add(gbox(0.012, ph, 0.006, M.ledLine, s * (pw / 2 - 0.02), ph / 2, -0.178, { cast: false }));
+    g.add(gbox(w - 0.1, 0.008, 0.012, M.ledLine, 0, 0.245, 0.19, { cast: false }));
+  }
   return g;
 }
 function curtains(M, F, h) {
-  if (F.W < 1.2) return;
+  if (F.W < 1.2 || F.windowless) return;
   const ch = h - 0.08; // ceiling to floor, as in the reference
   for (const u of [0.32, F.W - 0.32]) {
     const c = mesh(curtainGeo(0.6, ch, 4.5), M.curtain);
@@ -182,12 +218,12 @@ function living(M, F, h, seed) {
   F.put(Fn.art(M, Math.min(1.5, sw * 0.7), 0.85, seed % 2), left ? 0.01 : F.W - 0.01, sd, left ? 'right' : 'left', 1.5, 0.03, { solid: false, check: false, reserve: false, y: 1.62, accent: true });
   F.put(tvWall(M, Math.min(1.6, sw)), tvU, sd, left ? 'left' : 'right', Math.min(1.6, sw), 0.45, { accent: true, y: 0 });
   if (F.W >= 2.7) {
-    F.put(ST.coffeeTable(M), (sofaU + tvU) / 2 + (left ? 0.15 : -0.15), sd, left ? 'right' : 'left', 0.62, 1.0);
+    F.put(pick(M, 'coffeeTable', () => ST.coffeeTable(M)), (sofaU + tvU) / 2 + (left ? 0.15 : -0.15), sd, left ? 'right' : 'left', 0.62, 1.0);
     F.put(ST.flowers(M, 0.3, 1), (sofaU + tvU) / 2 + (left ? 0.15 : -0.15), sd - 0.22, 'in', 0.1, 0.1, { solid: false, check: false, reserve: false, y: 0.39 });
   }
   // upholstered ottoman with a throw at the open end of the seating group
   F.put(ST.ottoman(M), (sofaU + tvU) / 2, sd + sw / 2 + 0.25, 'in', 1.1, 0.6);
-  F.put(Fn.floorLamp(M, []), left ? 0.3 : F.W - 0.3, sd + sw / 2 + 0.3, 'in', 0.4, 0.4);
+  F.put(pick(M, 'floorLamp', () => Fn.floorLamp(M, [])), left ? 0.3 : F.W - 0.3, sd + sw / 2 + 0.3, 'in', 0.4, 0.4);
 
   // kitchen at the back: along the back wall if clear, else along a long wall
   const kLen = Math.min(2.8, F.W - 0.65);
@@ -214,18 +250,34 @@ function living(M, F, h, seed) {
   // search the free floor behind the seating for a 2 x 2 m spot (table + four chairs)
   let spot = null;
   const dMin = sd + sw / 2 + 0.9;
-  for (let dc = Math.max(dMin, (dMin + kitchenFront) / 2); dc <= F.L - 1.0 && !spot; dc += 0.15) {
+  // (the free floor nearest the middle of that stretch: a doorway can block the middle itself)
+  const dMid = (dMin + kitchenFront) / 2;
+  const depths = [];
+  for (let dc = dMin; dc <= F.L - 1.0; dc += 0.15) depths.push(dc);
+  depths.sort((a, b) => Math.abs(a - dMid) - Math.abs(b - dMid));
+  for (const dc of depths) {
+    if (spot) break;
     for (const uc of [F.W / 2, F.W * 0.6, F.W * 0.4, F.W * 0.7, F.W * 0.3]) if (F.fits([uc - 1.0, dc - 1.0, uc + 1.0, dc + 1.0])) { spot = [uc, dc]; break; }
   }
   if (spot) {
     const [uc, dc] = spot;
-    if (F.put(ST.diningTable(M), uc, dc, 'in', 0.9, 0.9, { snap: false })) {
-      const lamp = real(M, 'modern_ceiling_lamp_01', { h: 0.9 });
+    if (F.put(pick(M, 'diningTable', () => ST.diningTable(M)), uc, dc, 'in', 0.9, 0.9, { snap: false })) {
+      const lamp = pick(M, 'pendant', () => real(M, 'modern_ceiling_lamp_01', { h: 0.9 }));
       if (lamp) F.put(lamp, uc, dc, 'in', 0.1, 0.1, { solid: false, check: false, reserve: false, snap: false, y: h - 0.02 - lamp.userData.size.y });
       else F.put(Fn.pendant(M, [], h - 0.02, 0.85), uc, dc, 'in', 0.1, 0.1, { solid: false, check: false, reserve: false, snap: false });
       const chairs = [[uc, dc - 0.62, 'in'], [uc, dc + 0.62, 'out'], [uc - 0.62, dc, 'right'], [uc + 0.62, dc, 'left']];
       // the 2 x 2 m spot was checked for the whole set; chairs tuck under the table edge, so skip the overlap test
-      for (const [u, d, face] of chairs) F.put(ST.diningChair(M), u, d, face, 0.42, 0.42, { snap: false, check: false });
+      for (const [u, d, face] of chairs) F.put(pick(M, 'diningChair', () => ST.diningChair(M)), u, d, face, 0.42, 0.42, { snap: false, check: false });
+    }
+  }
+  // a long room gets a sideboard with a picture on the wall the middle of it would otherwise leave bare
+  if (F.L > 7) {
+    const dm = spot ? (spot[1] < F.L / 2 ? (spot[1] + kitchenFront) / 2 : (dMin + spot[1]) / 2) : F.L * 0.55;
+    for (const [u, face] of [[F.W - 0.2, 'left'], [0.2, 'right']]) {
+      if (F.put(Fn.consoleCabinet(M, 1.6), u, dm, face, 1.6, 0.35)) {
+        F.put(Fn.art(M, 1.2, 0.75, seed % 2), face === 'left' ? F.W - 0.01 : 0.01, dm, face, 1.2, 0.03, { solid: false, check: false, reserve: false, y: 1.55 });
+        break;
+      }
     }
   }
 }
@@ -268,6 +320,7 @@ function bedroom(M, F, h, seed, kids) {
         wall.add(pnl);
       }
       wall.add(gbox(fw + 0.04, 0.03, 0.06, M.oakVeneer, 0, fh + 0.08, 0.03));
+      if (M.ledLine) wall.add(gbox(fw, 0.008, 0.012, M.ledLine, 0, fh + 0.06, 0.066, { cast: false })); // a lit line under the rail
       const at = face === 'out' ? [u, F.L - 0.02] : face === 'right' ? [0.02, d] : [F.W - 0.02, d];
       const art = face === 'out' ? [u, F.L - 0.06] : face === 'right' ? [0.06, d] : [F.W - 0.06, d];
       F.put(wall, at[0], at[1], face, fw, 0.05, { solid: false, check: false, reserve: false });
@@ -532,6 +585,7 @@ export async function furnishUnit(floor, unitNumber, M, budget = 8) {
     floorFinish(room, M.oak, z, g);
     skirting(room, M.trim, z, swings, g, floor.sheet.walls);
     const F = frame(room.rect, room.type === 'hall' ? null : room.side, swings, z, solidLines, room.rects, clears);
+    F.windowless = !windowSide(room, floor.sheet.openings); // no curtains on a blank wall
     if (room.type === 'living') living(M, F, h, seed);
     else if (room.type === 'bedroom') bedroom(M, F, h, seed, room.kids);
     else hall(M, F);
@@ -556,7 +610,7 @@ export async function furnishUnit(floor, unitNumber, M, budget = 8) {
 // Common corridor / lift lobby of a floor-plan sheet (built once per sheet, at height 0).
 export async function furnishCommon(floor, M) {
   const g = new THREE.Group();
-  // (the 380 m² retail hall is not common space: it is let as shops, see shops.js)
+  // (floor 1's hall is too big for the area limit below: it is left unfurnished)
   const rooms = (floor.sheet.rooms ?? []).filter((r) => r.area > 8 && r.area < 200 && !floor.units.some((u) => u.kind === 'apartment' && u.rects.some((q) => inside(q, r.label[0], r.label[1]))));
   const solidLines = [...floor.sheet.walls, ...floor.sheet.openings.map((o) => o.rect)];
   const swings = floor.sheet.doorSwings ?? [];

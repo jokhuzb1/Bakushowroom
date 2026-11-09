@@ -1,9 +1,9 @@
-import { SHOPS, SHOP_Y0, SHOP_Y1 } from './shops.js';
-
 // Building levels and apartment boundaries, read from the "Baku City" 16-floor drawings (sheets 3-10).
-// Plan coordinates in meters: x east from grid axis 1, y south from grid axis И (north facade line).
+// Plan coordinates in meters: x east from grid axis 1, y south from the north facade line (axis Ж on the
+// revised podium sheets АР-8/АР-9, where И is 0.4 m further north).
 
-// Section A-A: floor 1 is 4.74 m (retail), floor 2 is 3.34 m, floors 3-16 are 3.04 m; roof slab at +50.64.
+// Section A-A: floor 1 is 4.74 m, floor 2 is 3.34 m, floors 3-16 are 3.04 m; roof slab at +50.64.
+// Floor 1 is planned from sheet АР-8 (hall + 4 flats).
 export function levels() {
   const out = [];
   let z = 0;
@@ -16,9 +16,10 @@ export function levels() {
 }
 export const ROOF_Z = 50.64;
 
-// Which drawing sheet describes each floor (matches tools/extract_plan.py SHEETS order).
+// Which drawing sheet describes each floor (matches tools/extract_plan.py SHEETS order; the АР-8 sheet
+// that floor 1 uses is appended by tools/update_podium.py).
 export function sheetIndexFor(floor) {
-  if (floor === 1) return 0;
+  if (floor === 1) return 6;
   if (floor === 2) return 1;
   if (floor === 3) return 2;
   if (floor <= 5) return 3;
@@ -47,10 +48,13 @@ const GROUND = {
   3: [[25.6, 10.2, 35, 18.2], [29.4, 8.0, 35, 10.2]],
 };
 
+// Floor 1's commercial hall on АР-8 (524.2 m² on the drawing; see branch.js): the street galleries and the three halls.
+const BRANCH_RECTS = [[2.84, -8.6, 32.22, -6.12], [0.22, -5.9, 12.32, 7.4], [12.54, -5.9, 22.5, 5], [15.98, 5, 19.06, 7.4], [22.74, -5.9, 34.86, 7.4]];
+
 export function unitsForFloor(floor, sheet) {
   const map = floor === 1 ? GROUND : floor <= 3 ? PODIUM : TYPICAL;
   const tags = Object.fromEntries((sheet?.units ?? []).map((t) => [t.type, t]));
-  const units = Object.entries(map).map(([n, rects]) => {
+  const flats = Object.entries(map).map(([n, rects]) => {
     const tag = tags[n] ?? {};
     return {
       id: `${floor}-${n}`,
@@ -63,9 +67,5 @@ export function unitsForFloor(floor, sheet) {
       kind: 'apartment',
     };
   });
-  // the retail podium is let as separate shops (see shops.js)
-  if (floor === 1) for (const s of SHOPS) {
-    units.push({ id: `shop-${s.slug}`, floor, number: 100 + SHOPS.indexOf(s), code: s.brand, rooms: null, area: +((s.x1 - s.x0) * (SHOP_Y1 - SHOP_Y0)).toFixed(1), rects: [[s.x0, SHOP_Y0, s.x1, SHOP_Y1]], kind: 'shop', shop: s });
-  }
-  return units;
+  return floor === 1 ? [...flats, { id: '1-branch', floor, number: 'branch', code: 'Branch', rooms: null, area: 524.2, rects: BRANCH_RECTS, kind: 'commercial' }] : flats;
 }

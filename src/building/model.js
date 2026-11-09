@@ -4,7 +4,6 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { piecesAround, projectUV } from '../geo.js';
 import { levels, ROOF_Z, sheetIndexFor, unitsForFloor } from './units.js';
-import { insideShop, SHOPS, fasciaSign } from './shops.js';
 
 export const CX = 17.5, CY = 9.1; // plan point that becomes the world origin
 const X = (x) => x - CX;
@@ -156,28 +155,24 @@ export function buildBuilding(data, M) {
     const Fc = new Batch(); // facade
     const z0 = lv.z, h = lv.h, top = z0 + h;
     const slabT = 0.22;
-    // floors 2-3 reach out over the podium (terraces); their outline starts at their own north facade
-    const box = lv.floor === 2 || lv.floor === 3 ? [F[0], data.sheets[1].facade[1], F[2], F[3]] : F;
+    // floors 2-3 reach out over floor 1's roof (terraces); their outline starts at their own north facade.
+    // Floor 1 runs further north still (АР-8).
+    const box = lv.floor === 2 || lv.floor === 3 ? [F[0], data.sheets[1].facade[1], F[2], F[3]] : lv.floor === 1 ? [F[0], sheet.facade[1], F[2], F[3]] : F;
 
     // slab with floor finish on top
-    const fp = [lv.floor === 1 ? [F[0], -4.4, F[2], F[3]] : box];
-    for (const r of fp) {
-      S.box(M.ceiling, X(r[0]), z0 - slabT, Z(r[1]), X(r[2]), z0 - 0.03, Z(r[3]));
-      S.box(M.floor, X(r[0]), z0 - 0.03, Z(r[1]), X(r[2]), z0, Z(r[3]));
-    }
+    S.box(M.ceiling, X(box[0]), z0 - slabT, Z(box[1]), X(box[2]), z0 - 0.03, Z(box[3]));
+    S.box(M.floor, X(box[0]), z0 - 0.03, Z(box[1]), X(box[2]), z0, Z(box[3]));
 
     // walls and door heads
     const wallTop = top - slabT;
     for (const r of sheet.walls) {
       if ((r[2] - r[0]) * (r[3] - r[1]) < 0.004) continue;
-      if (lv.floor === 1 && r[1] < F[1] - 0.3) continue; // podium columns are modelled on the facade
-      // bay partitions inside a let shop are left out: each shop is fitted out as one space (shops.js)
-      if (lv.floor === 1 && insideShop(r)) continue;
       if (r[1] > F[3] + 0.3 || r[3] < box[1] - 0.3) continue; // dimension-line artwork outside the outline
       if (r[1] < box[1] - 0.05) {
-        // the part in front of the stepped-back facade is a terrace divider: a low stone wall
+        // the part in front of the stepped-back facade is a terrace divider: a low stone wall, on floor 2 only
+        // (above that there is no slab under it, so it would float against the facade)
         const yb = Math.min(r[3], box[1]);
-        S.box(M.stone, X(r[0]), z0, Z(r[1]), X(r[2]), z0 + 1.1, Z(yb));
+        if (lv.floor === 2) S.box(M.stone, X(r[0]), z0, Z(r[1]), X(r[2]), z0 + 1.1, Z(yb));
         if (r[3] <= box[1]) continue;
         S.box(M.wall, X(r[0]), z0, Z(box[1]), X(r[2]), wallTop, Z(r[3]));
         continue;
@@ -185,13 +180,12 @@ export function buildBuilding(data, M) {
       S.box(M.wall, X(r[0]), z0, Z(r[1]), X(r[2]), wallTop, Z(r[3]));
     }
     for (const o of sheet.openings) {
-      if (o.kind !== 'door') continue;
       const r = o.rect;
-      S.box(M.wall, X(r[0]), z0 + 2.15, Z(r[1]), X(r[2]), wallTop, Z(r[3]));
+      if (o.kind === 'door') S.box(M.wall, X(r[0]), z0 + 2.15, Z(r[1]), X(r[2]), wallTop, Z(r[3]));
     }
 
     // facade skins with openings on the four sides
-    const sides = lv.floor === 1 ? ['south', 'west', 'east'] : ['north', 'south', 'west', 'east'];
+    const sides = ['north', 'south', 'west', 'east'];
     const band = lv.floor <= 5 ? 0 : lv.floor <= 10 ? 1 : 2;
     const bandTop = lv.floor === 5 || lv.floor === 10 || lv.floor === 16;
     const bandBottom = lv.floor === 2 || lv.floor === 6 || lv.floor === 11;
@@ -200,7 +194,8 @@ export function buildBuilding(data, M) {
       const fr = withPlace(sideFrame(side, f), side, f);
       const ops = openingsOn(sheet, side, fr).map((o) => {
         const isWin = o.kind === 'window';
-        const sill = isWin ? (lv.floor === 1 ? 1.0 : 0.85) : 0.0;
+        // floor 1's north front is the commercial hall's shopfront: glass to the ground
+        const sill = isWin ? (lv.floor === 1 ? (side === 'north' ? 0.0 : 1.0) : 0.85) : 0.0;
         const head = Math.min(h - 0.55, lv.floor === 1 ? 3.6 : h - 0.55);
         return { ...o, sill, head };
       });
@@ -268,8 +263,8 @@ export function buildBuilding(data, M) {
       }
     }
 
-    // balconies
-    for (const r of sheet.balconies) {
+    // balconies (floor 1's magenta outlines on АР-8 are steps, not balconies)
+    for (const r of lv.floor === 1 ? [] : sheet.balconies) {
       const north = r[3] < F[1] + 0.05 + (lv.floor <= 3 ? 0 : 0);
       if (lv.floor <= 3 && north) continue;
       const side = north ? 'north' : 'south';
@@ -302,18 +297,19 @@ export function buildBuilding(data, M) {
     g.add(B);
 
     // invisible hit volume for hovering / picking the floor from outside
-    const hb = lv.floor === 1 ? fp[0] : box;
+    const hb = box;
     const hit = new THREE.Mesh(new THREE.BoxGeometry(hb[2] - hb[0] + 0.9, h - 0.04, hb[3] - hb[1] + 0.9), new THREE.MeshBasicMaterial({ visible: false }));
     hit.position.set(X((hb[0] + hb[2]) / 2), z0 + h / 2, Z((hb[1] + hb[3]) / 2));
     hit.userData.floor = lv.floor;
     g.add(hit);
 
     // walk colliders (world XZ boxes)
-    const colliders = sheet.walls.filter((r) => !(lv.floor === 1 && insideShop(r))).map((r) => ({ x0: X(r[0]), x1: X(r[2]), z0: Z(r[1]), z1: Z(r[3]) }));
+    const colliders = sheet.walls.map((r) => ({ x0: X(r[0]), x1: X(r[2]), z0: Z(r[1]), z1: Z(r[3]) }));
     for (const r of sheet.balconies) colliders.push({ x0: X(r[0]) - 0.1, x1: X(r[2]) + 0.1, z0: Z(r[1]) - 0.15, z1: Z(r[1]) - 0.05 }, { x0: X(r[0]) - 0.1, x1: X(r[2]) + 0.1, z0: Z(r[3]) + 0.05, z1: Z(r[3]) + 0.15 });
 
     root.add(g);
-    floors.push({ ...lv, group: g, hit, sheet, colliders, box, units: unitsForFloor(lv.floor, sheet) });
+    // АР-8 has no flat labels; its flats are drawn with the same walls as on АР-9 (sheet 0), which has them
+    floors.push({ ...lv, group: g, hit, sheet, colliders, box, units: unitsForFloor(lv.floor, lv.floor === 1 ? data.sheets[0] : sheet) });
   }
 
   root.add(buildPodium(data, M, F));
@@ -322,55 +318,26 @@ export function buildBuilding(data, M) {
   return { root, floors, roof, F };
 }
 
-// Floor 1 street front: colonnade, shop glazing, signage and the podium roof (terraces of floor 2).
+// Floor 1's roof north of the tower (terraces of floor 2), its cornice and the street signs.
 function buildPodium(data, M, F) {
   const g = new THREE.Group();
   g.name = 'podium';
   g.userData.floor = 1;
   const B = new Batch();
-  const h = 4.74, yK = -4.4;
-  const colsX = [0, 3.2, 6.2, 9.4, 12.4, 15.2, 19.4, 22.6, 25.6, 28.8, 31.8, 35.0];
-  // shop glazing set back behind the columns, warm interiors behind
-  B.box(M.shopGlass, X(0.1), 0.3, Z(yK + 0.35), X(34.9), 3.85, Z(yK + 0.4));
-  // the shops behind the glass are real interiors (shops.js); only the two lobbies keep a backdrop
-  for (const [a, b] of [[6.2, 9.4], [25.6, 28.8]]) B.box(M.shopInterior, X(a), 0.0, Z(yK + 1.6), X(b), 3.85, Z(yK + 1.65));
-  for (let x = 0.1; x <= 34.95; x += 1.55) B.box(M.frame, X(x - 0.03), 0.3, Z(yK + 0.3), X(x + 0.03), 3.85, Z(yK + 0.42));
-  B.box(M.frame, X(0.1), 3.0, Z(yK + 0.3), X(34.9), 3.06, Z(yK + 0.42));
-  // sign band and plinth
-  B.box(M.stone, X(-0.1), 3.85, Z(yK + 0.1), X(35.1), h, Z(yK + 0.5));
-  B.box(M.stoneDark, X(-0.1), 0.0, Z(yK + 0.1), X(35.1), 0.3, Z(yK + 0.5));
-  // side returns of the podium
-  for (const x of [-0.1, 35.1]) B.box(M.stone, X(x - 0.15), 0, Z(yK + 0.1), X(x + 0.15), h, Z(F[1]));
-  // columns with bases and capitals
-  for (const x of colsX) {
-    const cyl = new THREE.CylinderGeometry(0.26, 0.29, 3.55, 24);
-    B.geo(M.stoneLight, cyl, new THREE.Matrix4().makeTranslation(X(x), 0.42 + 1.775, Z(yK)));
-    B.box(M.stoneLight, X(x - 0.38), 0.0, Z(yK - 0.38), X(x + 0.38), 0.42, Z(yK + 0.38));
-    B.box(M.stoneLight, X(x - 0.4), 3.97, Z(yK - 0.4), X(x + 0.4), 4.12, Z(yK + 0.4));
-    const cap = new THREE.CylinderGeometry(0.38, 0.27, 0.22, 24);
-    B.geo(M.stoneLight, cap, new THREE.Matrix4().makeTranslation(X(x), 3.86, Z(yK)));
-  }
-  // entablature + cornice over the colonnade
-  B.box(M.stoneLight, X(-0.5), 4.12, Z(yK - 0.45), X(35.5), 4.5, Z(yK + 0.5));
-  B.box(M.stoneLight, X(-0.7), 4.5, Z(yK - 0.7), X(35.7), 4.74, Z(yK + 0.5));
-  // podium roof: terraces in red-brown tiles + balustrade at the edge
-  B.box(M.terrace, X(0), 4.5, Z(yK + 0.3), X(35), 4.76, Z(F[1]));
-  const fr = withPlace(sideFrame('north', [0, yK, 35, 0]), 'north', [0, yK, 35, 0]);
-  balustrade(B, M, fr, -0.6, 35.6, 4.74, 0.55, 0.95);
+  const h = 4.74, yN = data.sheets[sheetIndexFor(1)].facade[1];
+  // cornice on the three open sides
+  B.box(M.stoneLight, X(-0.5), 4.5, Z(yN - 0.45), X(35.5), 4.74, Z(yN + 0.3));
+  for (const [a, b] of [[-0.5, -0.1], [35.1, 35.5]]) B.box(M.stoneLight, X(a), 4.5, Z(yN), X(b), 4.74, Z(F[1]));
+  // terraces in red-brown tiles + balustrade at the edge
+  B.box(M.terrace, X(0), 4.5, Z(yN), X(35), 4.76, Z(F[1]));
+  const fr = withPlace(sideFrame('north', [0, yN, 35, 0]), 'north', [0, yN, 35, 0]);
+  balustrade(B, M, fr, -0.6, 35.6, h, 0.55, 0.95);
   B.build(g);
-  // the two "BAKU CITY" signs over the entrances
+  // the two "BAKU CITY" signs over the street front
   const tex = signTexture('BAKU CITY');
-  for (const x of [8.0, 27.0]) {
+  for (const x of [7.6, 27.5]) {
     const s = new THREE.Mesh(new THREE.PlaneGeometry(4.6, 0.58), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.4, metalness: 0.2, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.35 }));
-    s.position.set(X(x), 4.3, Z(yK - 0.46));
-    s.rotation.y = Math.PI;
-    g.add(s);
-  }
-  // each shop's own illuminated fascia board, centred over its frontage, in line with the lobby signs
-  for (const sh of SHOPS) {
-    const w = Math.min(sh.x1 - sh.x0 - 0.7, 3.8);
-    const s = fasciaSign(sh, w);
-    s.position.set(X((sh.x0 + sh.x1) / 2), 4.3, Z(yK - 0.46));
+    s.position.set(X(x), 4.1, Z(yN - 0.2));
     s.rotation.y = Math.PI;
     g.add(s);
   }

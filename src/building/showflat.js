@@ -8,18 +8,21 @@ import { mergeGeometries as BufferGeometryUtilsMerge } from 'three/addons/utils/
 import { box as gbox, cyl, mesh } from '../geo.js';
 import { furnishUnit, breather } from './interior.js';
 import { CX, CY } from './model.js';
+import { hiTechKit } from '../styles/hiTech.js';
 
-export const SCALE = 1.35;
+// About 27% more floor than the drawings. The flats' rooms run deep from the facade (roughly 3 x 8 m), so the
+// gain goes into their width: they feel generous without turning into 13 m long halls.
+export const SCALE = { x: 1.22, y: 1.04 };
 const CEIL = 3.0; // m, show-flat clear height
 const X = (x) => x - CX, Z = (y) => y - CY;
 
 // ---------- plan scaling ----------
-function scaler(c, k) {
+function scaler(c, { x: kx, y: ky }) {
   // rect: thin dimensions (walls, frames) keep their thickness unless `full`; `keepSize` moves only the centre
   return (r, { full = false, keepSize = false } = {}) => {
     const cx = (r[0] + r[2]) / 2, cy = (r[1] + r[3]) / 2, w = r[2] - r[0], h = r[3] - r[1];
-    const nw = keepSize || (!full && w < 0.4) ? w : w * k, nh = keepSize || (!full && h < 0.4) ? h : h * k;
-    const ncx = c[0] + (cx - c[0]) * k, ncy = c[1] + (cy - c[1]) * k;
+    const nw = keepSize || (!full && w < 0.4) ? w : w * kx, nh = keepSize || (!full && h < 0.4) ? h : h * ky;
+    const ncx = c[0] + (cx - c[0]) * kx, ncy = c[1] + (cy - c[1]) * ky;
     return [ncx - nw / 2, ncy - nh / 2, ncx + nw / 2, ncy + nh / 2];
   };
 }
@@ -36,12 +39,13 @@ function scaledFloor(floor, unit, k) {
     ...sh,
     walls: sh.walls.filter((r) => near(r, area, 0)).map((r) => S(r)),
     openings: sh.openings.filter((o) => near(o.rect, area, 0)).map((o) => ({ ...o, rect: S(o.rect) })),
-    balconies: (sh.balconies ?? []).filter((r) => near(r, area, 0)).map((r) => S(r, { full: true })),
+    // (floor 1 has none: its magenta outlines on АР-8 are steps)
+    balconies: (floor.floor === 1 ? [] : sh.balconies ?? []).filter((r) => near(r, area, 0)).map((r) => S(r, { full: true })),
     fixtures: (sh.fixtures ?? []).filter((f) => near(f.rect, area, 0)).map((f) => ({ ...f, rect: S(f.rect, { keepSize: true }) })),
     doorSwings: (sh.doorSwings ?? []).filter((r) => near(r, area, 0)).map((r) => S(r, { full: true })),
     rooms: (sh.rooms ?? []).filter((r) => near(r.bbox, area, 0)).map((r) => ({
       ...r,
-      label: [c[0] + (r.label[0] - c[0]) * k, c[1] + (r.label[1] - c[1]) * k],
+      label: [c[0] + (r.label[0] - c[0]) * k.x, c[1] + (r.label[1] - c[1]) * k.y],
       bbox: S(r.bbox, { full: true }), inner: r.inner && S(r.inner, { full: true }), rects: r.rects.map((q) => S(q, { full: true })),
     })),
   };
@@ -155,10 +159,12 @@ function showflatKit(M) {
 }
 
 // ---------- shell: walls, window frames, ceiling, lighting ----------
-export async function buildShowflat(floor, unit, M, wallMat) {
+// design: 'classic' (Warm Minimal) or 'hitech' (see src/styles/hiTech.js)
+export async function buildShowflat(floor, unit, M, wallMat, design = 'classic') {
   const SF = scaledFloor(floor, unit, SCALE);
-  const SM = showflatKit(M);
-  wallMat = SM.plaster(wallMat);
+  const SM = design === 'hitech' ? hiTechKit(showflatKit(M)) : showflatKit(M);
+  wallMat = SM.paint ?? SM.plaster(wallMat);
+  const LIGHT = SM.lighting ?? { led: 0xffd9a8, ledPower: 2.2, spot: 0xfff4e6, room: 0xffd6a6, bakeColor: 0xfff3e6, bakePower: 1 };
   const tpl = await furnishUnit(SF, unit.number, SM);
   const breathe = breather(); // the shell is built in slices too, so walking in never freezes the view
   const g = new THREE.Group();
@@ -262,8 +268,8 @@ export async function buildShowflat(floor, unit, M, wallMat) {
   shell.add(gbox(ub[2] - ub[0] + 0.6, 0.12, ub[3] - ub[1] + 0.6, M.ceiling, X((ub[0] + ub[2]) / 2), H + 0.06, Z((ub[1] + ub[3]) / 2), { cast: false }));
 
   // ---------- lighting design per room ----------
-  const ledMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffd9a8, emissiveIntensity: 2.2 });
-  const spotMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff4e6, emissiveIntensity: 3 });
+  const ledMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: LIGHT.led, emissiveIntensity: LIGHT.ledPower });
+  const spotMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: LIGHT.spot, emissiveIntensity: 3 });
   const glowMat = new THREE.MeshBasicMaterial({ map: glowTexture(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.55 });
   const poolMat = new THREE.MeshBasicMaterial({ map: poolTexture(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.4, side: THREE.DoubleSide });
   const lights = new THREE.Group();
@@ -290,6 +296,15 @@ export async function buildShowflat(floor, unit, M, wallMat) {
       glow.position.set(X((iq[0] + iq[2]) / 2), H - 0.003, Z((iq[1] + iq[3]) / 2));
       glow.renderOrder = 3;
       lights.add(glow);
+      // hi-tech: linear LED slots set in black channels, running down the room
+      if (LIGHT.slots) {
+        const along = iq[3] - iq[1] >= iq[2] - iq[0], span = along ? iq[3] - iq[1] : iq[2] - iq[0], gap = (along ? iq[2] - iq[0] : iq[3] - iq[1]) / 3;
+        for (const s of [-0.5, 0.5]) {
+          const px = (iq[0] + iq[2]) / 2 + (along ? s * gap : 0), py = (iq[1] + iq[3]) / 2 + (along ? 0 : s * gap), l = Math.max(0.6, span - 0.5);
+          shell.add(gbox(along ? 0.07 : l, 0.012, along ? l : 0.07, SM.frameBlack, X(px), H - 0.006, Z(py), { cast: false }));
+          shell.add(gbox(along ? 0.04 : l - 0.03, 0.006, along ? l - 0.03 : 0.04, ledMat, X(px), H - 0.014, Z(py), { cast: false }));
+        }
+      }
     }
     // recessed downlights along the walls (in the bulkhead where there is one), each washing the wall below
     const inset = cove ? bw / 2 : 0.35, y = cove ? H - bh - 0.002 : H - 0.002;
@@ -318,13 +333,13 @@ export async function buildShowflat(floor, unit, M, wallMat) {
     // a real warm light per room so furniture and walls pick it up
     const area = rw * rd;
     if (area < 9 || room.type === 'bath') {
-      const bl = new THREE.PointLight(0xfff3e6, 0);
+      const bl = new THREE.PointLight(LIGHT.bakeColor, 0);
       bl.position.set(cx, H - 0.35, cz);
-      bl.userData.watts = room.type === 'bath' ? 60 + area * 8 : 40 + area * 6;
+      bl.userData.watts = (room.type === 'bath' ? 60 + area * 8 : 40 + area * 6) * LIGHT.bakePower;
       bakeLights.add(bl);
       continue;
     }
-    const pl = new THREE.PointLight(0xffd6a6, Math.min(5, 1.2 + area * 0.18), Math.max(6, Math.max(rw, rd) * 1.6), 2);
+    const pl = new THREE.PointLight(LIGHT.room, Math.min(5, 1.2 + area * 0.18), Math.max(6, Math.max(rw, rd) * 1.6), 2);
     pl.position.set(cx, H - 0.45, cz);
     lights.add(pl);
   }

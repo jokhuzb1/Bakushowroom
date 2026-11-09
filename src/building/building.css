@@ -141,5 +141,57 @@ body[data-moving] #signs, body[data-moving] #tip, body[data-moving] .exit { opac
 
 /* street view: always on offer next to "Building" */
 .floor-head .head-actions { display: flex; gap: 6px; }
-#street { font-size: 12px; padding: 7px 11px; border-radius: 8px; background: rgba(255, 178, 89, 0.22); color: var(--accent); }
-#street:hover { background: rgba(255, 178, 89, 0.36); }
+#street, #outside-360 { font-size: 12px; padding: 7px 11px; border-radius: 8px; background: rgba(255, 178, 89, 0.22); color: var(--accent); }
+#street:hover, #outside-360:hover { background: rgba(255, 178, 89, 0.36); }
+body:not([data-mode="building"]) #outside-360 { display: none; }
+
+/* time of day and weather (the building and floor views) */
+#sky { position: fixed; right: 20px; bottom: 20px; width: 318px; padding: 8px; border-radius: 14px; display: none; }
+body[data-mode="building"] #sky, body[data-mode="floor"] #sky { display: block; }
+body[data-pano] #sky { display: none !important; }
+#sky-toggle { width: 100%; padding: 7px 10px; border-radius: 9px; background: none; font-size: 13px; font-weight: 600; text-align: left; }
+#sky-toggle span { color: var(--accent); }
+#sky .sky-body { display: none; padding: 6px 2px 2px; }
+#sky.open .sky-body { display: block; }
+#sky .sky-row { display: flex; gap: 2px; padding: 3px; border-radius: 10px; background: rgba(255, 255, 255, 0.06); }
+#sky .sky-row button { flex: 1; padding: 6px 2px; border-radius: 8px; background: none; font-size: 12px; font-weight: 500; }
+#sky .sky-row button:hover { background: rgba(255, 255, 255, 0.1); }
+#sky .sky-row button.on { background: var(--accent); color: #23211e; font-weight: 600; }
+#sky-hour { width: 100%; margin: 10px 0 4px; accent-color: var(--accent); }
+#sky .sky-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; font-size: 12px; }
+#sky .sky-btns { display: flex; gap: 4px; flex: none; }
+#sky-path, #sky-see { padding: 4px 9px; border-radius: 8px; background: rgba(255, 255, 255, 0.08); font-size: 11px; white-space: nowrap; }
+#sky-see { background: rgba(255, 178, 89, 0.26); color: var(--accent); }
+#sky-path.on { background: rgba(255, 178, 89, 0.26); color: var(--accent); }
+#sky-path:disabled { opacity: 0.4; }
+#sky .sky-rows { display: grid; grid-template-columns: 1fr 1.3fr; gap: 6px; margin-top: 6px; }
+@media (max-width: 760px) {
+  #sky { right: 12px; bottom: 12px; width: min(318px, calc(100vw - 24px)); }
+  #sky:not(.open) { width: auto; }
+}
+
+/* the one-minute Showcase: everything else steps aside */
+.sc-buttons { display: flex; gap: 6px; margin: 12px 0 2px; }
+.sc-buttons button { padding: 9px 8px; border-radius: 10px; background: var(--accent); color: #23211e; font-size: 12px; font-weight: 700; white-space: nowrap; }
+#showcase-start { flex: 1; }
+.sc-buttons button:hover { filter: brightness(1.08); }
+body:not([data-mode="building"]) .sc-buttons { display: none; }
+body[data-showcase] > *:not(#view):not(#pano):not(#showcase):not(script) { visibility: hidden !important; }
+body[data-showcase] #pano > *:not(.pano-canvas) { display: none !important; }
+#showcase { position: fixed; inset: 0; z-index: 60; overflow: hidden; }
+#showcase[hidden] { display: none; }
+#sc-still { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+#sc-still.kb { animation: sc-push 3.2s linear forwards; }
+@keyframes sc-push { from { transform: scale(1); } to { transform: scale(1.07); } }
+#sc-black { position: absolute; inset: 0; background: #0d0c0a; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+#sc-black.on { opacity: 1; }
+#sc-wait { position: absolute; inset: 0; display: grid; place-content: center; color: #f4efe6; font-size: 16px; letter-spacing: 0.04em; }
+#sc-wait[hidden] { display: none; }
+.sc-track { position: absolute; left: 0; right: 0; top: 0; height: 3px; background: rgba(255, 255, 255, 0.16); }
+#sc-bar { height: 100%; width: 0; background: var(--accent); }
+.sc-top { position: absolute; top: 16px; right: 18px; display: flex; align-items: center; gap: 12px; color: #fff; font-size: 13px; font-variant-numeric: tabular-nums; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7); }
+#sc-skip { padding: 7px 13px; border-radius: 999px; background: rgba(18, 16, 14, 0.62); color: #fff; font-size: 12px; font-weight: 600; }
+#sc-skip:hover { background: rgba(18, 16, 14, 0.85); }
+.sc-caption { position: absolute; left: 16px; bottom: 16px; max-width: min(620px, calc(100% - 32px)); padding: 7px 11px; border-radius: 9px; background: rgba(14, 12, 10, 0.55); color: #fff; font-size: 12.5px; line-height: 1.42; pointer-events: none; }
+.sc-caption b { font-weight: 650; }
+#sc-ru { color: #f0d9b0; }

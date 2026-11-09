@@ -1,4 +1,4 @@
-// 360° tour viewer: the path-traced panoramas of a show-flat or shop (see bake.js / render_blender.py),
+// 360° tour viewer: the path-traced panoramas of a show-flat (see bake.js / render_blender.py),
 // with doorway hotspots to the next room, a mini plan with the heading cone, and a room strip.
 // Panoramas are equirectangular with u = 0 facing world +x and u = 0.25 facing +z (the bake's camera),
 // which an inverted sphere maps one to one, so hotspot directions from the bake land on the doorways.
@@ -15,10 +15,11 @@ export class PanoViewer {
     this.root = root;
     this.on3D = on3D;
     const $ = (s) => root.querySelector(s);
-    this.el = { canvas: $('.pano-canvas'), spots: $('.pano-spots'), title: $('.pano-title b'), sub: $('.pano-title span'), room: $('.pano-room'), plan: $('.pano-plan'), rooms: $('.pano-rooms'), wait: $('.pano-wait') };
+    this.el = { canvas: $('.pano-canvas'), spots: $('.pano-spots'), title: $('.pano-title b'), sub: $('.pano-title span'), room: $('.pano-room'), designs: $('.pano-designs'), plan: $('.pano-plan'), rooms: $('.pano-rooms'), wait: $('.pano-wait') };
     $('.pano-close').onclick = () => this.close();
     $('.pano-3d').onclick = () => { const t = this.tour; this.close(); this.on3D?.(t?.id); };
-    this.lon = 0; this.lat = 0; this.fov = 80;
+    this.lon = 0; this.lat = 0; this.fov = 68; // near a person's natural view: a wider lens makes rooms look huge
+    this.design = 'classic';
     this.vel = 0; this.anim = null; this.fade = null;
     this.textures = new Map();
     this.dir = new THREE.Vector3();
@@ -65,11 +66,12 @@ export class PanoViewer {
     const up = () => { if (drag && performance.now() - drag.t > 80) this.vel = 0; drag = null; };
     c.addEventListener('pointerup', up);
     c.addEventListener('pointercancel', up);
-    c.addEventListener('wheel', (e) => { e.preventDefault(); this.fov = clamp(this.fov + e.deltaY * 0.04, 35, 100); }, { passive: false });
+    c.addEventListener('wheel', (e) => { e.preventDefault(); this.fov = clamp(this.fov + e.deltaY * 0.04, 35, 115); }, { passive: false });
   }
 
-  async open(id, stopId = null) {
+  async open(id, stopId = null, design = null) {
     this.init();
+    if (design) this.design = design;
     this.root.hidden = false;
     document.body.dataset.pano = '1';
     if (this.tour?.id !== id) {
@@ -109,6 +111,22 @@ export class PanoViewer {
   buildUi() {
     const t = this.tour;
     this.el.rooms.innerHTML = '';
+    // design switch: the same viewpoint in another design (tours baked before there were designs have only one)
+    const designs = t.designs ?? [];
+    if (!designs.some((d) => d.id === this.design)) this.design = 'classic';
+    this.el.designs.hidden = designs.length < 2;
+    this.el.designs.innerHTML = '';
+    for (const d of designs) {
+      const b = document.createElement('button');
+      b.textContent = d.name;
+      b.classList.toggle('on', d.id === this.design);
+      b.onclick = () => {
+        this.design = d.id;
+        for (const x of this.el.designs.children) x.classList.toggle('on', x === b);
+        this.go(this.stop);
+      };
+      this.el.designs.append(b);
+    }
     for (const s of t.stops) {
       const b = document.createElement('button');
       b.innerHTML = `${s.name}${s.area ? `<small>${s.area.toFixed(1)} m²</small>` : ''}`; // street stops have no area
@@ -137,12 +155,13 @@ export class PanoViewer {
     this.stop = stop;
     for (const s of t.stops) s.btn.classList.toggle('on', s === stop);
     this.el.room.innerHTML = `<b>${stop.name}</b>${stop.area ? `<span>${stop.area.toFixed(1)} m²</span>` : ''}`;
-    history.replaceState(null, '', `#pano=${t.id}/${stop.id}`);
-    const toLon = heading ?? (look ? Math.atan2(stop.look[1], stop.look[0]) / DEG : this.lon);
+    history.replaceState(null, '', `#pano=${t.id}/${stop.id}${this.design === 'classic' ? '' : `/${this.design}`}`);
+    const toLon = heading ?? (look ? this.openingView(stop) : this.lon);
+    if (look) this.fov = stop.area ? (stop.area <= 6 ? 104 : stop.area <= 16 ? 96 : 88) : 80; // the whole room in view: the smaller it is, the wider
     this.anim = { from: { lon: this.lon, lat: this.lat }, d: { lon: wrap180(toLon - this.lon), lat: -this.lat }, t0: performance.now(), dur: 650 };
     this.vel = 0;
     this.hotspots(stop);
-    const url = `/pano/${t.id}/${stop.id}${small() ? '-2k' : ''}.jpg`;
+    const url = this.image(stop.id);
     const token = (this.token = {});
     const slow = setTimeout(() => { if (token === this.token) this.root.classList.add('loading'); }, 250);
     this.texture(url).finally(() => { clearTimeout(slow); if (token === this.token) this.root.classList.remove('loading'); }).then((tex) => {
@@ -162,8 +181,52 @@ export class PanoViewer {
       this.showWait(`${stop.name}: the 360° view is still being rendered. Use the 3D view in the meantime.`);
     });
     // warm the cache for the rooms one click away
-    for (const l of stop.links) this.texture(`/pano/${t.id}/${l.to}${small() ? '-2k' : ''}.jpg`).catch(() => {});
+    for (const l of stop.links) this.texture(this.image(l.to)).catch(() => {});
   }
+
+  // Which way a room opens: a flat's stop looks into the room, along its longest free view, rather than at the
+  // windows and curtains (stop.look). Tours whose views were chosen by hand keep them.
+  openingView(stop) {
+    const t = this.tour, given = Math.atan2(stop.look[1], stop.look[0]);
+    if (!t.designs?.length) return given / DEG;
+    const [px, py] = stop.plan;
+    let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+    for (const q of stop.rects) { bx0 = Math.min(bx0, q[0]); by0 = Math.min(by0, q[1]); bx1 = Math.max(bx1, q[2]); by1 = Math.max(by1, q[3]); }
+    const reach = (a) => {
+      const dx = Math.cos(a), dy = Math.sin(a);
+      // out of the room...
+      let d = Math.min(dx > 0 ? (bx1 - px) / dx : dx < 0 ? (bx0 - px) / dx : Infinity, dy > 0 ? (by1 - py) / dy : dy < 0 ? (by0 - py) / dy : Infinity);
+      // ...or into a wall
+      for (const [x0, y0, x1, y1] of t.walls) {
+        let t0 = 0, t1 = d;
+        for (const [p, v, lo, hi] of [[px, dx, x0, x1], [py, dy, y0, y1]]) {
+          if (Math.abs(v) < 1e-6) { if (p < lo || p > hi) { t1 = -1; } continue; }
+          let u = (lo - p) / v, w = (hi - p) / v;
+          if (u > w) [u, w] = [w, u];
+          t0 = Math.max(t0, u); t1 = Math.min(t1, w);
+        }
+        if (t0 <= t1 && t0 > 0.05) d = t0;
+      }
+      return Math.max(0, d);
+    };
+    const N = 72, r = Array.from({ length: N }, (_, i) => reach((i / N) * Math.PI * 2));
+    let best = given, top = -1;
+    for (let i = 0; i < N; i++) {
+      let sum = 0;
+      for (let j = -6; j <= 6; j++) sum += r[(i + j + N) % N]; // what a 60° view takes in
+      const a = (i / N) * Math.PI * 2;
+      const score = sum * (1 - 0.35 * Math.max(0, Math.cos(a - given))); // stop.look is towards the windows
+      if (score > top) { top = score; best = a; }
+    }
+    return best / DEG;
+  }
+
+  image(stopId) {
+    const dir = this.design === 'classic' ? '' : `${this.design}/`;
+    return `/pano/${this.tour.id}/${dir}${stopId}${small() ? '-2k' : ''}.jpg`;
+  }
+
+  get small() { return small(); }
 
   texture(url) {
     if (!this.textures.has(url)) {
@@ -176,6 +239,12 @@ export class PanoViewer {
       }, undefined, (e) => { this.textures.delete(url); rej(e); })));
     }
     return this.textures.get(url);
+  }
+
+  // free a panorama's memory (a long film would otherwise hold every 4K image it has shown)
+  release(url) {
+    this.textures.get(url)?.then((t) => t.dispose()).catch(() => {});
+    this.textures.delete(url);
   }
 
   hotspots(stop) {
@@ -205,6 +274,8 @@ export class PanoViewer {
       this.lon = a.from.lon + a.d.lon * e;
       this.lat = a.from.lat + a.d.lat * e;
       if (k >= 1) this.anim = null;
+    } else if (this.pan) {
+      this.lon += this.pan * dt; // the Showcase turns the view by itself
     } else if (Math.abs(this.vel) > 0.05) {
       this.lon += this.vel * dt;
       this.vel *= Math.exp(-dt * 4);

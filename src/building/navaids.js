@@ -111,6 +111,8 @@ export class NavAids {
   // Doorways between rooms of the flat: free cells (not inside a wall) that lie close to two
   // different rooms. Works for doors and open arches alike; walls between rooms block it.
   findDoorways(rooms, walls) {
+    // a plan that names its own doorways (the commercial branch)
+    if (rooms.length && rooms.every((r) => r.doors)) return new Map(rooms.map((r) => [r, r.doors.map((d) => ({ to: rooms.find((o) => o.id === d.to), c: d.c }))]));
     const mid = (q) => [(q[0] + q[2]) / 2, (q[1] + q[3]) / 2];
     const out = new Map(rooms.map((r) => [r, []]));
     const dist = (r, x, y) => Math.min(...r.rects.map((q) => Math.hypot(Math.max(q[0] - x, 0, x - q[2]), Math.max(q[1] - y, 0, y - q[3]))));

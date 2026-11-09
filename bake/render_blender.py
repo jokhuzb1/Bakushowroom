@@ -3,7 +3,8 @@
     <blender> -b --factory-startup -P bake/render_blender.py -- [options]
 
 Options (after "--"):
-    --variants f2-3,shop-evos      only these scenes (default: every bake/out/*.json)
+    --variants f2-3,f1-1           only these flats (default: every bake/out/*.json)
+    --designs hitech               only these interior designs (default: all)
     --rooms living,bath            only these tour stops
     --width 4096                   output width (height = width / 2)
     --samples 512                  max samples per pixel (adaptive, denoised)
@@ -31,13 +32,14 @@ HDRI = os.path.join(ROOT, 'bake', 'hdri', 'residential_garden.hdr')
 # the street views have their own buildings all round: a sky-only HDRI over them
 SKY_HDRI = os.path.join(ROOT, 'bake', 'hdri', 'kloofendal_48d_partly_cloudy_puresky.hdr')
 # like a photographer, open up a little in rooms with little or no daylight
-ROOM_EXPOSURE = {'living': 0.15, 'bedroom': 0.35, 'hall': 0.2, 'bath': -0.25, 'balcony': -0.5, 'shopFront': -0.35, 'shopBack': -0.2, 'street': -1.1}
+ROOM_EXPOSURE = {'living': 0.15, 'bedroom': 0.35, 'hall': 0.2, 'bath': -0.25, 'balcony': -0.5, 'lobby': -0.5, 'selfservice': -0.5, 'boardroom': 0.2, 'meeting': 0.2, 'consult': 0.1, 'shopFront': -0.35, 'shopBack': -0.2, 'street': -1.1, 'courtyard': -0.2}
 
 
 def args():
     argv = sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else []
     p = argparse.ArgumentParser()
     p.add_argument('--variants', default='')
+    p.add_argument('--designs', default='')
     p.add_argument('--rooms', default='')
     p.add_argument('--width', type=int, default=4096)
     p.add_argument('--samples', type=int, default=512)
@@ -200,7 +202,7 @@ def render_rooms(meta, o):
             continue
         os.makedirs(os.path.dirname(path), exist_ok=True)
         cam.location = b(room['cam'])
-        scene.view_settings.exposure = o.exposure + ROOM_EXPOSURE.get(room.get('kind'), 0)
+        scene.view_settings.exposure = o.exposure + meta.get('exposure', 0) + ROOM_EXPOSURE.get(room.get('kind'), 0)
         scene.render.filepath = path
         print(f"Rendering {room['output']} -> {path}", flush=True)
         bpy.ops.render.render(write_still=True)
@@ -213,13 +215,45 @@ def render_rooms(meta, o):
             bpy.data.images.remove(img)
 
 
+def render_stills(meta, o):
+    """Perspective views of an exterior scene: public/renders/<id>.jpg at the output width, 16:9."""
+    stills = meta.get('stills', [])
+    only = set(filter(None, o.rooms.split(',')))
+    if not stills or only:
+        return
+    scene = bpy.context.scene
+    data = bpy.data.cameras.new('Still')
+    data.clip_start = 0.1
+    data.clip_end = 3000
+    cam = bpy.data.objects.new('Still', data)
+    scene.collection.objects.link(cam)
+    scene.camera = cam
+    scene.render.resolution_x, scene.render.resolution_y = o.width, o.width * 9 // 16
+    scene.view_settings.exposure = o.exposure + ROOM_EXPOSURE['street']
+    out_dir = os.path.join(PANO_DIR, '_preview') if o.preview else os.path.join(ROOT, 'public')
+    for s in stills:
+        path = os.path.join(out_dir, s['output'] + '.jpg')
+        if o.skip_existing and os.path.exists(path):
+            continue
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        cam.location = b(s['pos'])
+        cam.rotation_euler = (b(s['look']) - b(s['pos'])).to_track_quat('-Z', 'Y').to_euler()
+        data.lens = s['lens']
+        scene.render.filepath = path
+        print(f"Rendering {s['output']} -> {path}", flush=True)
+        bpy.ops.render.render(write_still=True)
+
+
 def main():
     o = args()
     only = set(filter(None, o.variants.split(',')))
+    designs = set(filter(None, o.designs.split(',')))
     for meta_path in sorted(glob.glob(os.path.join(OUT_SCENES, '*.json'))):
         with open(meta_path) as f:
             meta = json.load(f)
         if only and meta['variant'] not in only:
+            continue
+        if designs and meta.get('design', 'classic') not in designs:
             continue
         bpy.ops.wm.read_factory_settings(use_empty=True)
         setup_render(o)
@@ -228,6 +262,7 @@ def main():
         add_lights(meta.get('lights', []))
         tune_materials()
         render_rooms(meta, o)
+        render_stills(meta, o)
 
 
 main()

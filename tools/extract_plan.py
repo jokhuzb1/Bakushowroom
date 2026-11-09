@@ -20,10 +20,10 @@ import pymupdf
 from scipy import ndimage as ndi
 
 PX_PER_M = 50  # 2 cm resolution
-CROP = (-2.0, -6.0, 37.0, 21.0)  # meters: x0, y0, x1, y1
+CROP = (-2.0, -10.0, 37.0, 21.0)  # meters: x0, y0, x1, y1 (the plinth floor has rooms out to y = -8.6)
 
 GRID_X = {'1': 0.0, '15': 35.0}
-GRID_Y = {'И': 0.0, 'А': 18.2}
+GRID_Y = {'И': 0.0, 'А': 18.2, 'К': -4.4}
 
 # which sheet describes which floors (from the sheet titles)
 SHEETS = [
@@ -54,6 +54,11 @@ def calibrate(page):
                 if t in GRID_Y:
                     ys[t] = cy
     sx = (xs['15'] - xs['1']) / 35.0
+    if 'К' in ys:
+        # Where the sheet shows the podium axes, the И and Ж bubbles (0.4 m apart) are drawn pushed apart
+        # on leaders, so the И label is not on its axis: calibrate on К (y = -4.4) and А (y = 18.2) instead
+        sy = (ys['А'] - ys['К']) / (18.2 + 4.4)
+        return {'x0': xs['1'], 'y0': ys['К'] + 4.4 * sy, 'sx': sx, 'sy': sy}
     sy = (ys['А'] - ys['И']) / 18.2
     return {'x0': xs['1'], 'y0': ys['И'], 'sx': sx, 'sy': sy}
 
@@ -271,7 +276,35 @@ def fixtures(fixture_mask, org):
     return [f for f in out if f['kind'] in ('shower', 'bath') or not any(inside(f['rect'], t) for t in trays)]
 
 
-def analyze(page):
+def auto_labels(walls, footprint, org, door_mask, min_area=1.5, prefer=()):
+    """For sheets without room-area labels: one label per enclosed space (walls and door leaves close
+    the rooms), placed at its pole of inaccessibility and carrying its measured area. A space holding one
+    of the `prefer` labels (e.g. from a sheet with the same layout) keeps that label instead."""
+    doors = ndi.binary_dilation(door_mask, np.ones((3, 3)))
+    space = footprint & ~walls & ~doors
+    regions, n = ndi.label(space)
+    out, claimed = [], {}
+    for lab in prefer:
+        r, c = int((lab['y'] - org[1]) * PX_PER_M), int((lab['x'] - org[0]) * PX_PER_M)
+        if 0 <= r < regions.shape[0] and 0 <= c < regions.shape[1] and regions[r, c]:
+            claimed.setdefault(int(regions[r, c]), []).append(lab)
+    for k, sl in enumerate(ndi.find_objects(regions), start=1):
+        if k in claimed:
+            out += claimed[k]
+            continue
+        m = regions[sl] == k
+        area = float(m.sum()) / PX_PER_M ** 2
+        if area < min_area:
+            continue
+        dist = ndi.distance_transform_edt(m)
+        r, c = np.unravel_index(dist.argmax(), dist.shape)
+        out.append({'area': round(area, 2), 'x': org[0] + (sl[1].start + c) / PX_PER_M, 'y': org[1] + (sl[0].start + r) / PX_PER_M})
+    return out
+
+
+def analyze(page, labels=None, prefer=()):
+    """labels: room labels to use instead of the sheet's own ("auto" = one per enclosed space, keeping any
+    of the `prefer` labels that falls inside one)."""
     cal = calibrate(page)
     M, org = layer_masks(page, cal)
     rc = ndi.binary_opening(M['rc'], np.ones((3, 3)))
@@ -369,7 +402,9 @@ def analyze(page):
     fp = rects_from_mask(ndi.binary_opening(footprint, np.ones((6, 6))), min_px=6)
     units = unit_tags(page, cal)
     fix_mask = M['fixture']
-    rooms, swings = extract_rooms(walls, footprint, org, room_labels(page, cal), fix_mask, M['door'])
+    if labels == 'auto':
+        labels = auto_labels(walls, footprint, org, M['door'], prefer=prefer)
+    rooms, swings = extract_rooms(walls, footprint, org, labels if labels is not None else room_labels(page, cal), fix_mask, M['door'])
     return {
         'calibration': {k: round(v, 4) for k, v in cal.items()},
         'walls': [to_m(r, org) for r in rects_from_mask(walls)],
