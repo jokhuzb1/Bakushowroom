@@ -36,8 +36,9 @@ const FADE = 320; // ms, through black, which also hides the moment a scene is b
 const HERO = { floor: 2, number: 5 }; // the apartment shown inside
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const ease = (k) => (k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2);
-// (a dev server answers a missing file with its index page, so ask for the image itself)
-const exists = (src) => new Promise((r) => { const i = new Image(); i.onload = () => r(true); i.onerror = () => r(false); i.src = src; });
+// is this image there? Only its headers are fetched: online, downloading every image first took most of a minute.
+// (a dev server answers a missing file with its index page, hence the type)
+const exists = (src) => fetch(src, { method: 'HEAD' }).then((r) => r.ok && (r.headers.get('content-type') ?? '').startsWith('image')).catch(() => false);
 
 // does the segment a -> b pass through a box from the ground to height h?
 function hitsBox(a, b, [x0, z0, x1, z1], h) {
@@ -259,13 +260,18 @@ export class Showcase {
     orbit.maxPolarAngle = Math.PI - 0.05;
     this.atm.pathOn = false;
 
-    // the floors are built before the clock starts, so the film never stops for them; panoramas load one scene ahead
+    // The floors get a few seconds' head start, then go on building while the film plays (the first indoor scene comes
+    // well after that); images load one scene ahead
     const films = await this.scenes(length);
     const floors = length > 60 ? [HERO.floor, 1] : [HERO.floor];
     const urls = new Set();
-    const prefetch = (c) => { if (c?.pano) { const u = this.panoUrl(c.pano); urls.add(u); this.pano.texture(u).catch(() => {}); } };
+    const prefetch = (c) => {
+      if (c?.stillId) new Image().src = `/renders/${c.stillId}.jpg`;
+      if (c?.pano) { const u = this.panoUrl(c.pano); urls.add(u); this.pano.texture(u).catch(() => {}); }
+    };
+    prefetch(films.find((c) => c.stillId));
     prefetch(films.find((c) => c.pano));
-    await Promise.race([Promise.all(floors.map((n) => this.ensureInterior(this.floorOf(n)))), wait(20000)]);
+    await Promise.race([Promise.all(floors.map((n) => this.ensureInterior(this.floorOf(n)))), wait(6000)]);
     if (this.run !== me) return;
     el.wait.hidden = true;
 
