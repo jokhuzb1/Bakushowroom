@@ -222,6 +222,36 @@ function cityLights(m, uNight) {
         if (cityKey > 0.9 && vMapUv.y > 0.12) diffuseColor.rgb += vec3(2.2, 1.6, 0.95) * uNight * (cityKey - 0.9) * 10.0;`);
   };
 }
+// A cloud: soft overlapping puffs with a flat, shaded base.
+function cloudTexture(seed) {
+  const W = 512, H = 256, c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  let s = seed * 7919 + 13;
+  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < 170; i++) {
+    const u = rnd(), x = W * (0.1 + u * 0.8), top = Math.sin(u * Math.PI) ** 0.7 * H * 0.5;
+    const y = H * 0.7 - rnd() * top, r = (12 + rnd() * 34) * (0.6 + Math.sin(u * Math.PI) * 0.7);
+    const d = g.createRadialGradient(x, y, 0, x, y, r);
+    d.addColorStop(0, `rgba(255,255,255,${0.4 + rnd() * 0.45})`);
+    d.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = d;
+    g.beginPath();
+    g.arc(x, y, r, 0, Math.PI * 2);
+    g.fill();
+  }
+  // shaded underneath, only where there is cloud
+  g.globalCompositeOperation = 'source-atop';
+  const shade = g.createLinearGradient(0, H * 0.3, 0, H * 0.85);
+  shade.addColorStop(0, 'rgba(150,160,180,0)');
+  shade.addColorStop(1, 'rgba(170,178,196,0.42)');
+  g.fillStyle = shade;
+  g.fillRect(0, 0, W, H);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
 // Low drifts of snow: against the buildings, around the trees, ploughed banks along the roads.
 function snowDrifts(site) {
   const geos = [];
@@ -316,6 +346,21 @@ export class Atmosphere {
     this.farGroundColor = this.farGround.color.clone();
     this.uNight = { value: 0 };
     cityLights(this.backdropMat, this.uNight);
+    // clouds drifting over the neighbourhood
+    this.cloudMats = [1, 2, 3].map((v) => new THREE.SpriteMaterial({ map: cloudTexture(v), transparent: true, depthWrite: false, fog: false }));
+    for (const m of this.cloudMats) { m.color.setRGB(...this.light.cloud).multiplyScalar(8); m.opacity = 0.92; }
+    this.clouds = new THREE.Group();
+    let cs = 777;
+    const crnd = () => ((cs = (cs * 16807) % 2147483647) / 2147483647);
+    for (let i = 0; i < 34; i++) {
+      const a = crnd() * Math.PI * 2, r = 220 + crnd() * 760, w = 170 + crnd() * 300;
+      const cloud = new THREE.Sprite(this.cloudMats[i % 3]);
+      cloud.position.set(CENTER.x + Math.cos(a) * r, 150 + crnd() * 190, CENTER.z + Math.sin(a) * r);
+      cloud.scale.set(w, w * (0.34 + crnd() * 0.16), 1);
+      cloud.renderOrder = -1;
+      this.clouds.add(cloud);
+    }
+    this.scene.add(this.clouds);
     this.drifts = snowDrifts(this.site);
     this.scene.add(this.drifts);
     this.snowLevel = 0;
@@ -406,6 +451,12 @@ export class Atmosphere {
     this.moonSprite.position.copy(this.camera.position).addScaledVector(MOON, R);
     this.sunSprite.material.color.setRGB(...L.col).multiplyScalar(2.2);
     this.moonSprite.visible = sky && L.night > 0.3 && !overcast;
+    // (under rain or snow the whole sky is cloud)
+    this.clouds.visible = sky && !overcast;
+    for (const m of this.cloudMats) {
+      m.color.setRGB(...L.cloud).multiplyScalar(8);
+      m.opacity = 0.92 - L.night * 0.45;
+    }
     this.path.visible = sky && this.pathOn && this.hour !== null;
     if (this.path.visible && this.pathSeason !== this.season) this.buildPath();
 
@@ -463,7 +514,7 @@ export class Atmosphere {
 
   setStudio(on) {
     this.studio = on;
-    this.sunSprite.visible = this.moonSprite.visible = this.path.visible = this.lamps.visible = this.rain.visible = this.snow.visible = this.drifts.visible = false;
+    this.sunSprite.visible = this.moonSprite.visible = this.path.visible = this.lamps.visible = this.rain.visible = this.snow.visible = this.drifts.visible = this.clouds.visible = false;
     if (!on) return this.update();
     this.snowCover.value = 0;
     this.sunDir.copy(this.defaultDir);
@@ -504,6 +555,8 @@ export class Atmosphere {
     // snow builds up over a few seconds and is gone the moment the weather changes
     const dt = Math.min(0.1, (now - this.lastTick) / 1000);
     this.lastTick = now;
+    // (a gentle drift; it wraps around the neighbourhood)
+    for (const c of this.clouds.children) { c.position.x += dt * 1.6; if (c.position.x > CENTER.x + 1000) c.position.x -= 2000; }
     this.snowLevel = this.weather === 'snow' ? Math.min(1, this.snowLevel + dt / 5) : 0;
     this.snowCover.value = this.studio ? 0 : this.snowLevel;
     this.drifts.visible = !this.studio && this.snowLevel > 0;

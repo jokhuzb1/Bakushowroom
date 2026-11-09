@@ -185,7 +185,7 @@ async function init() {
   composer.addPass(ssaaPass);
   const gtao = new GTAOPass(scene, camera, innerWidth, innerHeight);
   // it hides points and lines from its normals pass, but not sprites: the sun and the lamp glows came out as black blocks
-  { const hide = gtao._overrideVisibility.bind(gtao); gtao._overrideVisibility = () => { hide(); scene.traverseVisible((o) => { if (o.isSprite) gtao._visibilityCache.push(o); }); for (const o of gtao._visibilityCache) o.visible = false; }; }
+  { const hide = gtao._overrideVisibility.bind(gtao); gtao._overrideVisibility = () => { hide(); scene.traverseVisible((o) => { if (o.isSprite || o.userData.noAO) gtao._visibilityCache.push(o); }); for (const o of gtao._visibilityCache) o.visible = false; }; }
   // AO is soft, low-frequency shading: compute it at half resolution (about a quarter of the cost)
   { const setSize = gtao.setSize.bind(gtao); gtao.setSize = (w, h) => setSize(Math.max(1, w / 2), Math.max(1, h / 2)); gtao.setSize(innerWidth * dpr, innerHeight * dpr); }
   gtao.updateGtaoMaterial({ radius: 0.8, distanceExponent: 1.4, thickness: 2, scale: 1 });
